@@ -45,18 +45,30 @@ except ImportError:
 class PodAPIError(Exception):
     """Erreur renvoyée par l'API Pod (avec code HTTP et corps de réponse)."""
     def __init__(self, message: str, status: int = 0, body: str = ""):
+        # status : code HTTP (401, 403, 400…) ; body : corps de réponse (diagnostic).
         super().__init__(message)
         self.status = status
         self.body = body
 
 
 class PodAPI:
+    """Client de l'API REST Esup-Pod, authentifié par TOKEN.
+
+    Toutes les opérations « métadonnées » passent par ici : lister les types,
+    chaînes, thèmes, utilisateurs ; créer/mettre à jour des vidéos ; lancer
+    l'encodage ; poser des crédits. Les relations (owner, type, sites…) sont
+    exprimées par des URLs absolues, jamais par des identifiants numériques."""
+
     def __init__(self, base_url: str, token: str, verify_ssl: bool = True):
+        # base_url : racine de l'instance (ex. https://videos.utoulouse.fr)
+        # token    : jeton d'API ; il hérite des droits du compte qui l'a généré.
+        # verify_ssl : vérification du certificat TLS (True en production).
         self.base_url = base_url.rstrip("/")
-        self.rest = f"{self.base_url}/rest"
+        self.rest = f"{self.base_url}/rest"          # racine de l'API REST (/rest)
         self.token = token
         self.verify_ssl = verify_ssl
         self.session = requests.Session()
+        # Le token est injecté une fois pour toutes dans l'en-tête Authorization.
         self.session.headers.update({"Authorization": f"Token {token}"})
 
     # ╔══════════════════════════════════════════════════════════════════╗
@@ -69,6 +81,9 @@ class PodAPI:
         return s if s.startswith("http") else f"{self.rest}{s}"
 
     def _json(self, resp: requests.Response):
+        """Transforme une réponse HTTP en données Python.
+        Lève PodAPIError si le code est >= 400 (en conservant le corps pour
+        diagnostic) ; renvoie sinon le JSON décodé, le texte brut, ou None."""
         if resp.status_code >= 400:
             raise PodAPIError(
                 f"HTTP {resp.status_code} sur {resp.url}",
@@ -83,24 +98,28 @@ class PodAPI:
         return None
 
     def _get(self, endpoint: str, params: dict | None = None):
+        """Requête GET (lecture) sur l'API. `params` = filtres de requête."""
         r = self.session.get(self._abs(endpoint), params=params,
                              headers={"Accept": "application/json"},
                              timeout=30, verify=self.verify_ssl)
         return self._json(r)
 
     def _post(self, endpoint: str, json=None, data=None):
+        """Requête POST (création). Corps en JSON ou en form-data selon l'appel."""
         r = self.session.post(self._abs(endpoint), json=json, data=data,
                              headers={"Accept": "application/json"},
                              timeout=30, verify=self.verify_ssl)
         return self._json(r)
 
     def _patch(self, endpoint: str, json=None, data=None):
+        """Requête PATCH (mise à jour PARTIELLE : seuls les champs fournis changent)."""
         r = self.session.patch(self._abs(endpoint), json=json, data=data,
                              headers={"Accept": "application/json"},
                              timeout=30, verify=self.verify_ssl)
         return self._json(r)
 
     def _delete(self, endpoint: str):
+        """Requête DELETE (suppression). Renvoie True si le serveur répond 204."""
         r = self.session.delete(self._abs(endpoint),
                              headers={"Accept": "application/json"},
                              timeout=30, verify=self.verify_ssl)
@@ -110,6 +129,8 @@ class PodAPI:
         return True  # 204 No Content attendu en cas de succès
 
     def _options(self, endpoint: str) -> dict:
+        """Requête OPTIONS : renvoie le SCHÉMA d'une ressource (champs requis,
+        types…). Sert à découvrir ce qu'une instance attend réellement."""
         r = self.session.options(self._abs(endpoint),
                              headers={"Accept": "application/json"},
                              timeout=20, verify=self.verify_ssl)
@@ -237,10 +258,12 @@ class PodAPI:
     # ── 2. Types / chaînes / sites ────────────────────────────────────────
 
     def get_types(self) -> list[dict]:
+        """Liste les TYPES de vidéo de l'instance (ex. Cours, Conférence…)."""
         data = self._get("/types/", {"limit": 100})
         return data.get("results", []) if isinstance(data, dict) else (data or [])
 
     def get_channels(self) -> list[dict]:
+        """Liste toutes les CHAÎNES (paginé)."""
         return self._paginate("/channels/", {"limit": 200})
 
     def get_sites(self) -> list[dict]:
@@ -333,6 +356,8 @@ class PodAPI:
                     total = encoder.len
 
                     def _cb(monitor):
+                        # Callback de progression du flux multipart : remonte le
+                        # nombre d'octets déjà lus/envoyés au reste de l'appli.
                         if progress_cb:
                             progress_cb(monitor.bytes_read, total)
 
@@ -388,6 +413,8 @@ class PodAPI:
 
     def add_contributor(self, video_url: str, name: str, email: str = "",
                        role: str = "author", weblink: str = "") -> dict:
+        """Ajoute un CONTRIBUTEUR (crédit libre) à une vidéo : nom + rôle +
+        e-mail + lien. N'a pas besoin d'être un compte Pod."""
         data = {
             "video": video_url,
             "name": name,
@@ -400,6 +427,7 @@ class PodAPI:
         return self._json(r)
 
     def get_contributors(self, video_id: int) -> list[dict]:
+        """Liste les contributeurs (crédits) déjà posés sur une vidéo."""
         data = self._get("/contributors/", {"video": video_id})
         return data.get("results", []) if isinstance(data, dict) else (data or [])
 
@@ -493,9 +521,11 @@ class PodAPI:
         return self.patch_video(video, payload)
 
     def set_video_draft(self, video, value: bool) -> dict:
+        """Bascule une vidéo en brouillon (True) ou non (False)."""
         return self.patch_video(video, {"is_draft": bool(value)})
 
     def set_video_restricted(self, video, value: bool) -> dict:
+        """Bascule l'accès restreint (connexion requise) d'une vidéo."""
         return self.patch_video(video, {"is_restricted": bool(value)})
 
     def assign_video_to_channels(self, video, channel_urls: list[str],
@@ -530,6 +560,7 @@ class PodAPI:
     #              via parentId.
 
     def get_themes(self) -> list[dict]:
+        """Liste tous les THÈMES (sous-catégories de chaînes), paginé."""
         return self._paginate("/themes/", {"limit": 300})
 
     def create_channel(self, title: str, theme_urls: Optional[list[str]] = None, *,
@@ -549,6 +580,7 @@ class PodAPI:
         return self._post("/channels/", json=payload)
 
     def patch_channel(self, channel: str, payload: dict) -> dict:
+        """Met à jour une chaîne (réf = URL ou id). `payload` = champs à changer."""
         ep = channel if str(channel).startswith("http") else f"/channels/{channel}/"
         return self._patch(ep, json=payload)
 
@@ -565,6 +597,7 @@ class PodAPI:
         return self._post("/themes/", json=payload)
 
     def patch_theme(self, theme: str, payload: dict) -> dict:
+        """Met à jour un thème (réf = URL ou id). `payload` = champs à changer."""
         ep = theme if str(theme).startswith("http") else f"/themes/{theme}/"
         return self._patch(ep, json=payload)
 

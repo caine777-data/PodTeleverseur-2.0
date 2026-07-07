@@ -64,6 +64,11 @@ APP_VERSION = __version__
 # ════════════════════════════════════════════════════════════════════════════
 
 class UploadItem:
+    """Une vidéo dans la file de téléversement.
+
+    Regroupe le fichier à envoyer, son titre (modifiable), son état d'avancement
+    et, une fois déposée, son slug et son URL. Les attributs `row`, `title_var`
+    et `status_lbl` sont les widgets d'affichage, remplis au moment du rendu."""
     def __init__(self, path: str):
         """Crée une entrée de la file d'upload à partir d'un chemin de fichier."""
         self.path = path
@@ -87,16 +92,27 @@ class UploadItem:
 #  APPLICATION
 # ════════════════════════════════════════════════════════════════════════════
 
-# Base conditionnelle : mixe le moteur de glisser-déposer si disponible
+# Base conditionnelle : mixe le moteur de glisser-déposer si disponible.
+# tkinterdnd2 n'est pas toujours installé → on choisit la classe de base en
+# conséquence, pour que l'appli fonctionne même sans glisser-déposer.
 if HAS_DND:
     class _AppBase(ctk.CTk, TkinterDnD.DnDWrapper):
-        pass
+        pass          # CTk + capacité de glisser-déposer
 else:
     class _AppBase(ctk.CTk):
-        pass
+        pass          # CTk seul (pas de glisser-déposer)
 
 
 class App(_AppBase):
+    """Fenêtre principale de Pod Téléverseur.
+
+    Assemble l'interface (barre latérale + onglets Téléversement, Configuration,
+    Journal…), gère la connexion à l'instance (token), le scan et le dépôt des
+    vidéos par lot, et — pour les fichiers > 500 Mo — la bascule vers le
+    téléversement par morceaux via le compte véhicule DEPOT puis la réattribution
+    au propriétaire choisi. Toutes les opérations réseau tournent dans des threads
+    séparés ; les mises à jour d'interface repassent par le thread principal via
+    les helpers `_run` (tâche de fond) et `_ui` (mise à jour d'affichage)."""
     def __init__(self):
         """Initialise la fenêtre, charge config + token, construit l'UI et tente une connexion auto."""
         super().__init__()
@@ -728,6 +744,8 @@ class App(_AppBase):
                      text=f"Téléversement {idx}/{total} : {it.title}", text_color="gray")
 
             def progress(sent, tot, item=it):
+                # Callback de progression : met à jour la barre du fichier en cours
+                # (fraction envoyée) et le libellé « Mo envoyés / Mo total ».
                 frac = sent / tot if tot else 0
                 self._ui(self.file_progress.set, frac)
                 self._ui(self.file_progress_lbl.configure,
@@ -926,12 +944,12 @@ class App(_AppBase):
                      font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=3,
                                                            padx=12, pady=(12, 4), sticky="w")
 
-        ctk.CTkLabel(api_box, text="URL :", width=70, anchor="e").grid(row=1, column=0, padx=8, pady=8)
+        ctk.CTkLabel(api_box, text="URL :", width=110, anchor="e").grid(row=1, column=0, padx=8, pady=8)
         self.url_entry = ctk.CTkEntry(api_box, width=430)
         self.url_entry.insert(0, self.config_data.get("url", ""))
         self.url_entry.grid(row=1, column=1, padx=8, pady=8, sticky="ew")
 
-        ctk.CTkLabel(api_box, text="Token :", width=70, anchor="e").grid(row=2, column=0, padx=8, pady=8)
+        ctk.CTkLabel(api_box, text="Token :", width=110, anchor="e").grid(row=2, column=0, padx=8, pady=8)
         self.token_entry = ctk.CTkEntry(api_box, width=430, show="*")
         if self.token:
             self.token_entry.insert(0, self.token)
