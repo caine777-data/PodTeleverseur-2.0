@@ -39,7 +39,7 @@ KEYRING_TOKEN_KEY = "service_token"
 #    → Ce compte ne doit JAMAIS être superutilisateur ni staff.
 #    → En cas de rotation du mot de passe, il faut recompiler et redistribuer.
 VEHICLE_USERNAME = "DEPOT"
-VEHICLE_PASSWORD = "YUr%RE7fe%"
+VEHICLE_PASSWORD = "V&xehx7WB!iBWLoL%97HDjK&kg"
 
 # ── Bascule vers le téléversement par morceaux (chunked) ──────────────────
 CHUNK_THRESHOLD_BYTES = 500 * 1024 * 1024      # 500 Mo
