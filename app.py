@@ -1586,7 +1586,10 @@ class App(_AppBase):
         une seule source de vérité à mettre à jour pour changer la version."""
         win = ctk.CTkToplevel(self)
         win.title("À propos")
-        win.geometry("440x520")
+        # Hauteur portée de 520 à 620 px : l'ajout des mentions légales
+        # (copyright + licence, cette dernière tenant sur plusieurs lignes)
+        # faisait dépasser le contenu hors de la fenêtre.
+        win.geometry("460x620")
         win.resizable(False, False)
         _focus_toplevel(win, self)   # amène la fenêtre au premier plan (modale)
 
