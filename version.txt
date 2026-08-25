@@ -28,7 +28,7 @@ VSVersionInfo(
             StringStruct(u'ProductName',      u'Pod Televerseur'),
             StringStruct(u'ProductVersion',   u'2.0.0'),
             StringStruct(u'CompanyName',      u'Universite de Toulouse'),
-            StringStruct(u'LegalCopyright',   u'(C) 2026 Universite de Toulouse'),
+            StringStruct(u'LegalCopyright',   u'© Copyright 2026 Cédric MONNA'),
             StringStruct(u'Comments',
                          u'Developpe par Cedric MONNA, Philippe BAQUE et Michel JACOB '
                          u'(support-pod@utoulouse.fr) pour l Universite de Toulouse. '

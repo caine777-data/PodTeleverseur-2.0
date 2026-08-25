@@ -112,11 +112,24 @@ jobs:
             --add-data "assets:assets" \
             app.py
 
+      # Sur Apple Silicon, macOS EXIGE que tout exécutable porte une signature
+      # valide. Sans elle, le système refuse l'application avec le message
+      # trompeur « est endommagé et ne peut pas être ouvert » — alors que le
+      # fichier est intact. Une signature « ad hoc » (-s -) suffit à lever ce
+      # blocage : elle ne certifie pas l'éditeur (il faudrait un compte Apple
+      # Developer payant), mais elle rend le paquet cohérent.
+      - name: Signer l'application (signature ad hoc)
+        run: |
+          codesign --force --deep --sign - "dist/PodTeleverseur.app"
+          codesign --verify --deep --strict --verbose=2 "dist/PodTeleverseur.app"
+
       # Étape 2 : DMG (image disque avec raccourci vers /Applications)
       - name: Fabriquer le DMG macOS
         run: |
           mkdir -p dmg_stage
-          cp -R "dist/PodTeleverseur.app" dmg_stage/
+          # `ditto` préserve la signature et les liens internes du paquet,
+          # ce que `cp -R` ne garantit pas.
+          ditto "dist/PodTeleverseur.app" "dmg_stage/PodTeleverseur.app"
           ln -s /Applications dmg_stage/Applications
           hdiutil create -volname "Pod Televerseur" -srcfolder dmg_stage \
             -ov -format UDZO "dist/PodTeleverseur.dmg"
@@ -125,8 +138,12 @@ jobs:
       - name: Compresser l'app en ZIP
         run: |
           cd dist
-          zip -r PodTeleverseur-macOS.zip PodTeleverseur.app \
-            || zip -r PodTeleverseur-macOS.zip PodTeleverseur
+          # IMPORTANT : ne PAS utiliser `zip` sur un .app. La commande zip ne
+          # préserve ni les liens symboliques internes ni les attributs
+          # étendus du paquet : la signature est cassée à la décompression,
+          # et macOS affiche à nouveau « est endommagé ». `ditto` est
+          # l'outil prévu par Apple pour archiver un paquet applicatif.
+          ditto -c -k --sequesterRsrc --keepParent PodTeleverseur.app PodTeleverseur-macOS.zip
 
       # Publication des deux livrables macOS comme artefacts du run
       - name: Publier PodTeleverseur.dmg

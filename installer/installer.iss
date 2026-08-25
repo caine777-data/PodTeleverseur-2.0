@@ -14,6 +14,7 @@
 #define MyAppName "Pod Téléverseur"
 #define MyAppVersion "2.0.0"
 #define MyAppPublisher "Université de Toulouse"
+#define MyAppCopyright "© Copyright 2026 Cédric MONNA"
 #define MyAppExeName "PodTeleverseur.exe"
 #define MyAppContact "support-pod@utoulouse.fr"
 
@@ -24,6 +25,7 @@ AppId={{8F3A6C21-4D7B-4E2A-9C15-7B2E5D9A1C04}}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
+AppCopyright={#MyAppCopyright}
 AppContact={#MyAppContact}
 AppSupportURL=mailto:{#MyAppContact}
 

@@ -19,7 +19,9 @@ __contact__     = "support-pod@utoulouse.fr"
 __institution__ = "Université de Toulouse"
 __version__     = "2.0.0"
 __date__        = "2026"
-__license__     = "Usage interne — Université de Toulouse"
+__copyright__   = "© Copyright 2026 Cédric MONNA"
+__license__     = ("Tous droits réservés — réutilisation, diffusion ou "
+                   "adaptation soumises à l'autorisation de l'auteur.")
 
 
 import os
@@ -720,6 +722,28 @@ class App(_AppBase):
             _t.sleep(cfg.CHUNK_VERIFY_INTERVAL_S)
         return None
 
+    @staticmethod
+    def _est_coupure_reseau(err: Exception) -> bool:
+        """Cette erreur vient-elle d'une coupure de connexion (et non d'un refus
+        du serveur) ?
+
+        On ne veut replier sur l'envoi par morceaux QUE dans ce cas. Un refus
+        métier (400 champ manquant, 403 droits insuffisants…) échouerait de la
+        même façon en chunké : le rejouer ne ferait que perdre du temps et
+        risquerait de créer un doublon.
+
+        Signature typique de la coupure par la passerelle :
+        « SSLEOFError: EOF occurred in violation of protocol ».
+        """
+        texte = f"{getattr(err, 'body', '')} {err}".lower()
+        indices = ("sslerror", "ssleoferror", "eof occurred",
+                   "connection aborted", "connection reset",
+                   "max retries exceeded", "connectionerror",
+                   "remotedisconnected", "broken pipe")
+        # `status` vaut 0 quand aucune réponse HTTP n'a été reçue (vraie coupure).
+        sans_reponse = getattr(err, "status", 0) in (0, 502, 503, 504)
+        return sans_reponse and any(i in texte for i in indices)
+
     def _do_batch_upload(self, owner_url: str, type_url: str):
         """(Thread) Téléverse chaque vidéo, ajoute les crédits, lance l'encodage, suit la progression.
 
@@ -758,6 +782,8 @@ class App(_AppBase):
                 self._ui(self._log,
                          f"Relance {item.title} : {message} (essai {attempt}/{total_attempts})")
 
+            # `big` peut être RÉÉVALUÉ : si l'envoi direct est coupé par la
+            # passerelle, on repasse ici en forçant la voie chunkée.
             big = self._file_size(it.path) > cfg.CHUNK_THRESHOLD_BYTES
             try:
                 if big:
@@ -830,17 +856,72 @@ class App(_AppBase):
                                  f"⚠️ Vidéo créée (slug={slug}) mais introuvable via l'API pour "
                                  "réattribution — à vérifier côté web.")
                 else:
-                    # ── Petit fichier : upload classique par TOKEN (inchangé) ──
-                    video = self.api.upload_video(
-                        it.path, it.title or it.filename, owner_url, type_url,
-                        main_lang=self.config_data.get("main_lang", "fr"),
-                        cursus=self.config_data.get("cursus", "0"),
-                        is_draft=is_draft,
-                        additional_owner_urls=self.additional_owner_urls,
-                        site_urls=self.site_urls,
-                        progress_cb=progress,
-                        retry_cb=on_retry,
-                    )
+                    # ── Fichier sous le seuil : upload classique par TOKEN ──
+                    try:
+                        video = self.api.upload_video(
+                            it.path, it.title or it.filename, owner_url, type_url,
+                            main_lang=self.config_data.get("main_lang", "fr"),
+                            cursus=self.config_data.get("cursus", "0"),
+                            is_draft=is_draft,
+                            additional_owner_urls=self.additional_owner_urls,
+                            site_urls=self.site_urls,
+                            progress_cb=progress,
+                            retry_cb=on_retry,
+                        )
+                    except PodAPIError as e:
+                        # REPLI AUTOMATIQUE SUR L'ENVOI PAR MORCEAUX.
+                        #
+                        # L'envoi direct peut être coupé par la passerelle même
+                        # sous le seuil : au-delà d'environ une minute de
+                        # transfert, nginx ferme la connexion (erreur SSL « EOF
+                        # occurred in violation of protocol »). Le seuil en
+                        # octets ne suffit donc pas : ce qui compte est la DURÉE
+                        # de l'envoi, qui dépend du débit montant.
+                        #
+                        # Réessayer à l'identique échoue invariablement. On
+                        # bascule donc sur la voie chunkée, conçue pour résister
+                        # à ces coupures, plutôt que d'abandonner.
+                        if not self._est_coupure_reseau(e):
+                            raise
+                        self._ui(self._log,
+                                 f"⚠️ {it.title} : envoi direct coupé par le serveur. "
+                                 "Bascule automatique sur l'envoi par morceaux…")
+                        self._ui(self._set_item_status, it,
+                                 "⟳ envoi par morceaux", "#f59e0b")
+                        if chunked is None:
+                            chunked = PodChunkedSession(
+                                self.config_data.get("url", ""),
+                                self.vehicle_username, self.vehicle_password)
+                            chunked.login()
+                            self._ui(self._log, "Session véhicule ouverte (repli chunké).")
+                        slug = chunked.upload_video_chunked(
+                            it.path, chunk_size=cfg.CHUNK_SIZE_BYTES,
+                            progress_cb=progress, retry_cb=on_retry)
+                        video = self.api.get_video_by_slug(slug) if hasattr(
+                            self.api, "get_video_by_slug") else None
+                        if not video:
+                            raise PodAPIError(
+                                f"Vidéo envoyée par morceaux (slug={slug}) mais introuvable "
+                                "via l'API — à vérifier côté web.", 0, "")
+                        # La vidéo est née au nom du véhicule : on la réattribue.
+                        patch = {
+                            "owner": owner_url,
+                            "title": it.title or it.filename,
+                            "type": type_url,
+                            "is_draft": is_draft,
+                        }
+                        if self.additional_owner_urls:
+                            patch["additional_owners"] = list(self.additional_owner_urls)
+                        try:
+                            self.api.patch_video(video, patch)
+                            self._ui(self._log,
+                                     f"✅ {it.title} : repli par morceaux réussi (slug={slug}).")
+                        except Exception as pe:
+                            it.error = f"réattribution échouée : {pe}"
+                            self._ui(self._set_item_status, it, "⚠️ NON réattribuée", "#ef4444")
+                            self._ui(self._log,
+                                     f"⚠️⚠️ {it.title} : vidéo créée (slug={slug}) mais NON "
+                                     f"réattribuée — RESTE au nom du véhicule ! Détail : {pe}")
                     it.slug = video.get("slug", "") if isinstance(video, dict) else ""
                     it.video_url = video.get("url", "") if isinstance(video, dict) else ""
 
@@ -1560,6 +1641,7 @@ class App(_AppBase):
             ("Établissement", __institution__),
             ("Contact",  __contact__),
             ("Instance", "videos.utoulouse.fr"),
+            ("Copyright", __copyright__),
             ("Licence",  __license__),
         ]
         for i, (cle, val) in enumerate(lignes):
@@ -1567,7 +1649,8 @@ class App(_AppBase):
                          font=ctk.CTkFont(size=11, weight="bold")).grid(
                 row=i, column=0, padx=(12, 6), pady=4, sticky="e")
             ctk.CTkLabel(info, text=val, anchor="w",
-                         font=ctk.CTkFont(size=11), text_color="gray80").grid(
+                         font=ctk.CTkFont(size=11), text_color="gray80",
+                         wraplength=270, justify="left").grid(
                 row=i, column=1, padx=(0, 12), pady=4, sticky="w")
         info.columnconfigure(1, weight=1)
 
@@ -1675,7 +1758,7 @@ class App(_AppBase):
              "suivante) : vous n'avez rien de particulier à faire. Évitez de fermer "
              "l'application pendant un envoi en cours."),
 
-            ("7. Gros fichiers (plus de 500 Mo)",
+            ("7. Gros fichiers (plus de 150 Mo)",
              "Au-delà de 500 Mo, l'application bascule automatiquement sur un envoi "
              "par petits morceaux, plus robuste pour les gros fichiers. C'est "
              "totalement transparent : vous déposez comme d'habitude, la vidéo finit "
@@ -1720,7 +1803,27 @@ class App(_AppBase):
              "Le bouton « Oublier le token / Se déconnecter » (onglet Configuration) "
              "efface le token de ce poste."),
 
-            ("11. Problèmes courants",
+            ("11. macOS : « l'application est endommagée »",
+             "L'application N'EST PAS endommagée : macOS affiche ce message pour "
+             "toute application diffusée hors de l'App Store.\n\n"
+             "Marche à suivre, dans cet ordre :\n"
+             "1. Ouvrez le .dmg et glissez l'application dans le dossier "
+             "Applications (ou sur le Bureau).\n"
+             "2. Éjectez le .dmg — indispensable : tant que l'application est "
+             "dedans, elle est en lecture seule et rien ne peut être corrigé.\n"
+             "3. Ouvrez le Terminal (⌘+Espace, tapez « Terminal ») et saisissez :\n"
+             "       xattr -cr\n"
+             "   puis un ESPACE, puis glissez l'application dans la fenêtre du "
+             "Terminal (le chemin s'écrit tout seul) et appuyez sur Entrée.\n"
+             "4. Relancez l'application.\n\n"
+             "Si le message persiste, la signature du paquet a été abîmée pendant "
+             "le transfert. Réparez-la de la même façon avec :\n"
+             "       codesign --force --deep --sign -\n\n"
+             "À noter : transférer l'application par messagerie (Telegram, "
+             "WhatsApp…) casse souvent sa signature. Téléchargez-la toujours "
+             "depuis la page Moodle."),
+
+            ("12. Problèmes courants",
              "• « 0 utilisateur » lors du chargement des comptes : le token n'a pas le "
              "droit de lister les utilisateurs. Le dépôt reste possible, mais la "
              "recherche de comptes est limitée — voyez avec le service informatique.\n"
