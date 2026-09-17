@@ -153,3 +153,45 @@ Développé pour l'Université de Toulouse, avec Philippe BAQUÉ et Michel JACOB
 outil, en tout ou partie, sont soumises à l'autorisation préalable de l'auteur.
 
 Contact : support-pod@utoulouse.fr
+
+---
+
+## Apparence — module partagé `theme.py`
+
+`theme.py` est **commun à PodAdmin, au Téléverseur v2 et au Téléverseur v3**.
+Une correction de palette faite ici bénéficie aux trois outils ; les faire
+diverger reviendrait à corriger trois fois le même défaut.
+
+⚠️ **Toute couleur est un COUPLE `(clair, sombre)`.** Une teinte écrite seule
+s'applique telle quelle aux deux thèmes. L'application en comptait **80** avant
+le portage. Un test l'interdit désormais.
+
+⚠️ **Le contraste se calcule**, il ne s'apprécie pas à l'œil : toutes les
+teintes de texte atteignent 4,5:1 (WCAG 2.1 AA) sur l'ensemble de l'échelle de
+surfaces, dans les deux modes.
+
+## Mode clair / sombre
+
+Bouton de bascule en pied de barre latérale, choix **enregistré** — un
+enseignant qui préfère le mode clair ne doit pas le redemander à chaque dépôt.
+Sombre reste le défaut.
+
+## Messages d'erreur
+
+⚠️ Une exception ne s'affiche jamais telle quelle. `message_utilisateur(e)`
+traduit les cas connus en phrase actionnable ; `self._signaler(widget, e,
+contexte)` affiche **et** journalise en un seul appel, pour qu'on ne puisse
+plus faire l'un sans l'autre. Le détail technique part au **Journal**.
+
+## Périmètre
+
+⚠️ La v2 n'a **pas** l'onglet « Mes vidéos », et c'est délibéré : on ne
+souhaite pas, dans un premier temps, que les enseignants puissent relancer un
+ré-encodage. Un test le vérifie — son apparition serait une régression de
+périmètre.
+
+## Tests
+
+```bash
+python -m pytest tests/ -q
+```

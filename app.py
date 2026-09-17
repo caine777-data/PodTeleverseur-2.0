@@ -33,6 +33,9 @@ import customtkinter as ctk
 from tkinter import filedialog, messagebox
 
 import config as cfg
+# Apparence et messages PARTAGÉS avec PodAdmin et le Téléverseur v3.
+from theme import *                                    # noqa: F401,F403
+from theme import message_utilisateur, etat_vide, verifier_palette  # noqa: F401
 from pod_api import PodAPI, PodAPIError
 # Moteur de téléversement par morceaux via session web (gros fichiers > seuil).
 from pod_chunked import PodChunkedSession, PodChunkedError
@@ -210,7 +213,7 @@ class App(_AppBase):
                      font=ctk.CTkFont(size=16, weight="bold")).pack(pady=(2, 0), padx=14)
 
         # État connexion
-        box = ctk.CTkFrame(self.sidebar, fg_color="gray20", corner_radius=8)
+        box = ctk.CTkFrame(self.sidebar, fg_color=S_LIGNE, corner_radius=8)
         box.pack(padx=12, pady=14, fill="x")
         self.status_dot = ctk.CTkLabel(box, text="⚫", font=ctk.CTkFont(size=13))
         self.status_dot.pack(side="left", padx=8, pady=6)
@@ -220,10 +223,10 @@ class App(_AppBase):
 
         # Agent identifié
         self.agent_lbl = ctk.CTkLabel(self.sidebar, text="", font=ctk.CTkFont(size=11),
-                                      text_color="gray70", wraplength=190, justify="left")
+                                      text_color=T_SECONDAIRE, wraplength=190, justify="left")
         self.agent_lbl.pack(padx=14, pady=(0, 6), anchor="w")
 
-        ctk.CTkFrame(self.sidebar, height=1, fg_color="gray30").pack(fill="x", padx=12, pady=4)
+        ctk.CTkFrame(self.sidebar, height=1, fg_color=C_NEUTRE).pack(fill="x", padx=12, pady=4)
 
         self.nav_btns = {}
         for label, key in [
@@ -254,7 +257,20 @@ class App(_AppBase):
                       command=self._show_about).pack(fill="x", padx=6, pady=2)
 
         ctk.CTkLabel(self.sidebar, text=f"v{APP_VERSION}",
-                     font=ctk.CTkFont(size=9), text_color="gray40").pack(side="bottom", pady=10)
+                     font=ctk.CTkFont(size=9), text_color=T_DISCRET).pack(side="bottom", pady=10)
+
+        # Bascule clair / sombre — identique au Téléverseur v3 et à PodAdmin.
+        #
+        # L'application était figée en mode sombre. Le choix est enregistré :
+        # un enseignant qui préfère le mode clair ne doit pas le redemander à
+        # chaque dépôt.
+        self.theme_btn = ctk.CTkButton(
+            self.sidebar, text="", width=150, height=26,
+            font=ctk.CTkFont(size=11), fg_color=C_NEUTRE,
+            hover_color=C_NEUTRE_SURV, text_color=T_SUR_NEUTRE,
+            command=self._basculer_theme)
+        self.theme_btn.pack(side="bottom", pady=(6, 2))
+        self._maj_libelle_theme()
 
         # Zone principale
         self.content = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
@@ -264,6 +280,27 @@ class App(_AppBase):
         self._build_tab_upload()
         self._build_tab_config()
         self._build_tab_log()
+
+    def _basculer_theme(self):
+        """Passe du mode sombre au mode clair, et inversement."""
+        nouveau = "light" if ctk.get_appearance_mode().lower() == "dark" else "dark"
+        ctk.set_appearance_mode(nouveau)
+        self._maj_libelle_theme()
+        try:
+            cfg.save_theme(nouveau)
+        except Exception:
+            pass          # une préférence non enregistrée ne doit rien casser
+        self._log(f"Thème : mode {'clair' if nouveau == 'light' else 'sombre'}.")
+
+    def _maj_libelle_theme(self):
+        """Le bouton annonce le mode VERS lequel il bascule : « Mode clair »
+        sur fond sombre se comprend sans hésiter."""
+        sombre = ctk.get_appearance_mode().lower() == "dark"
+        try:
+            self.theme_btn.configure(text="☀  Mode clair" if sombre
+                                     else "🌙  Mode sombre")
+        except Exception:
+            pass
 
     def _show_tab(self, key: str):
         """Affiche l'onglet `key` et met en surbrillance son bouton de navigation."""
@@ -294,7 +331,7 @@ class App(_AppBase):
         ctk.CTkButton(sel, text="📁  Ajouter un dossier", width=190,
                       command=self._add_folder).pack(side="left", padx=(0, 8))
         ctk.CTkButton(sel, text="🗑  Vider la liste", width=140,
-                      fg_color="gray35", hover_color="gray28",
+                      fg_color=C_NEUTRE, hover_color=C_NEUTRE_SURV,
                       command=self._clear_items).pack(side="left")
 
         self.count_lbl = ctk.CTkLabel(sel, text="0 vidéo(s)", text_color="gray",
@@ -335,14 +372,14 @@ class App(_AppBase):
                       command=self._choose_upload_owner).grid(
             row=5, column=0, columnspan=2, padx=12, pady=(2, 10), sticky="w")
         self.owner_status_lbl = ctk.CTkLabel(common, text="⚠️ à définir avant l'envoi",
-                                             text_color="#f59e0b",
+                                             text_color=T_ALERTE,
                                              font=ctk.CTkFont(size=12, weight="bold"))
         self.owner_status_lbl.grid(row=5, column=2, columnspan=2, padx=12, pady=(2, 10),
                                    sticky="w")
 
         # Propriétaires additionnels communs
         ctk.CTkButton(common, text="👥  Propriétaires additionnels…", width=240,
-                      fg_color="gray35", hover_color="gray28",
+                      fg_color=C_NEUTRE, hover_color=C_NEUTRE_SURV,
                       command=self._edit_additional_owners).grid(
             row=2, column=2, columnspan=2, padx=12, pady=(0, 6), sticky="w")
         self.add_owners_lbl = ctk.CTkLabel(common, text="aucun", text_color="gray",
@@ -382,7 +419,7 @@ class App(_AppBase):
 
         self.launch_btn = ctk.CTkButton(
             launch, text="🚀  Lancer le téléversement", height=40,
-            fg_color="#16a34a", hover_color="#15803d",
+            fg_color=C_SUCCES, hover_color=C_SUCCES_SURV,
             font=ctk.CTkFont(size=14, weight="bold"),
             command=self._start_upload)
         self.launch_btn.pack(side="left")
@@ -392,7 +429,7 @@ class App(_AppBase):
         # et re-tente uniquement les vidéos en échec (voir _on_batch_done).
         self.retry_btn = ctk.CTkButton(
             launch, text="🔄  Relancer les échecs", height=40,
-            fg_color="#f59e0b", hover_color="#d97706",
+            fg_color=C_ALERTE, hover_color=C_ALERTE_SURV,
             font=ctk.CTkFont(size=14, weight="bold"),
             command=self._retry_failed)
         self.retry_btn.pack(side="left", padx=(8, 0))
@@ -411,7 +448,7 @@ class App(_AppBase):
         self.file_progress_lbl.pack(anchor="w")
 
         # Progression globale du lot
-        self.batch_progress = ctk.CTkProgressBar(frame, progress_color="#16a34a")
+        self.batch_progress = ctk.CTkProgressBar(frame, progress_color=C_SUCCES)
         self.batch_progress.pack(fill="x", pady=(4, 0))
         self.batch_progress.set(0)
 
@@ -440,7 +477,7 @@ class App(_AppBase):
                     found.append(os.path.join(root, name))
         if not found:
             self.global_msg.configure(text="Aucune vidéo trouvée dans ce dossier.",
-                                      text_color="#f59e0b")
+                                      text_color=T_ALERTE)
             return
         self._add_paths(sorted(found))
 
@@ -466,10 +503,10 @@ class App(_AppBase):
             self._show_tab("upload")
             self._add_paths(sorted(found))
             self.global_msg.configure(
-                text=f"{len(found)} vidéo(s) ajoutée(s) par glisser-déposer.", text_color="#22c55e")
+                text=f"{len(found)} vidéo(s) ajoutée(s) par glisser-déposer.", text_color=T_SUCCES)
         else:
             self.global_msg.configure(
-                text="Aucune vidéo reconnue dans les éléments déposés.", text_color="#f59e0b")
+                text="Aucune vidéo reconnue dans les éléments déposés.", text_color=T_ALERTE)
 
     def _add_paths(self, paths):
         """Ajoute des chemins à la file en évitant les doublons, puis rafraîchit l'affichage."""
@@ -504,7 +541,7 @@ class App(_AppBase):
             return
 
         # En-tête
-        hdr = ctk.CTkFrame(self.list_frame, fg_color="gray22", corner_radius=4)
+        hdr = ctk.CTkFrame(self.list_frame, fg_color=S_LIGNE, corner_radius=4)
         hdr.pack(fill="x", pady=(0, 2))
         ctk.CTkLabel(hdr, text="Fichier", width=230, anchor="w",
                      font=ctk.CTkFont(size=11, weight="bold")).pack(side="left", padx=8, pady=4)
@@ -515,7 +552,7 @@ class App(_AppBase):
 
         for i, it in enumerate(self.items):
             row = ctk.CTkFrame(self.list_frame,
-                               fg_color="gray17" if i % 2 == 0 else "gray14", corner_radius=4)
+                               fg_color=S_CARTE if i % 2 == 0 else "gray14", corner_radius=4)
             row.pack(fill="x", pady=1)
             it.row = row
 
@@ -538,12 +575,12 @@ class App(_AppBase):
 
             # bouton supprimer
             ctk.CTkButton(row, text="✕", width=28, height=26,
-                          fg_color="gray30", hover_color="#7f1d1d",
+                          fg_color=C_NEUTRE, hover_color=C_DESTR_SURV,
                           command=lambda item=it: self._remove_item(item)).pack(side="right", padx=4)
 
             # état
             it.status_lbl = ctk.CTkLabel(row, text=it.status, width=100,
-                                         text_color="gray60", font=ctk.CTkFont(size=11))
+                                         text_color=T_DISCRET, font=ctk.CTkFont(size=11))
             it.status_lbl.pack(side="right", padx=6)
 
         self.count_lbl.configure(text=f"{len(self.items)} vidéo(s)")
@@ -554,7 +591,7 @@ class App(_AppBase):
             self.items.remove(item)
             self._refresh_list()
 
-    def _set_item_status(self, item: UploadItem, status: str, color="gray60"):
+    def _set_item_status(self, item: UploadItem, status: str, color=T_DISCRET):
         """Met à jour le libellé d'état d'une vidéo dans la liste."""
         item.status = status
         if item.status_lbl:
@@ -566,7 +603,7 @@ class App(_AppBase):
         """Ouvre OwnerPicker pour choisir les co-propriétaires communs au lot."""
         if not self.api:
             self.global_msg.configure(text="Connectez-vous d'abord (onglet Configuration).",
-                                      text_color="#f59e0b")
+                                      text_color=T_ALERTE)
             return
         OwnerPicker(self, on_done=self._on_owners_picked,
                     preselected=dict(self.additional_owner_map))
@@ -576,7 +613,7 @@ class App(_AppBase):
         self.additional_owner_urls = urls
         self.additional_owner_map = dict(zip(urls, labels))
         if urls:
-            self.add_owners_lbl.configure(text=", ".join(labels)[:60], text_color="#22c55e")
+            self.add_owners_lbl.configure(text=", ".join(labels)[:60], text_color=T_SUCCES)
         else:
             self.add_owners_lbl.configure(text="aucun", text_color="gray")
 
@@ -595,10 +632,10 @@ class App(_AppBase):
         name = self.config_data.get("agent_username", "")
         if owner_url:
             self.owner_status_lbl.configure(text=f"✅ {name or 'défini'}",
-                                            text_color="#22c55e")
+                                            text_color=T_SUCCES)
         else:
             self.owner_status_lbl.configure(text="⚠️ à définir avant l'envoi",
-                                            text_color="#f59e0b")
+                                            text_color=T_ALERTE)
 
     def _choose_upload_owner(self):
         """Ouvre le sélecteur pour choisir explicitement le PROPRIÉTAIRE des vidéos.
@@ -612,7 +649,7 @@ class App(_AppBase):
         compte (telle que renvoyée par l'API), sinon rien n'apparaît coché."""
         if not self.api:
             self.global_msg.configure(text="Connectez-vous d'abord (onglet Configuration).",
-                                      text_color="#f59e0b")
+                                      text_color=T_ALERTE)
             self._show_tab("config")
             return
 
@@ -645,10 +682,10 @@ class App(_AppBase):
         """Vérifie les prérequis (connexion, propriétaire OBLIGATOIRE, type) puis lance le lot."""
         if not self.api:
             self.global_msg.configure(text="Non connecté. Voir l'onglet Configuration.",
-                                      text_color="#ef4444")
+                                      text_color=T_ERREUR)
             return
         if not self.items:
-            self.global_msg.configure(text="Aucune vidéo à téléverser.", text_color="#f59e0b")
+            self.global_msg.configure(text="Aucune vidéo à téléverser.", text_color=T_ALERTE)
             return
 
         # BLOCAGE VOLONTAIRE : aucun envoi tant que le propriétaire n'est pas
@@ -658,14 +695,14 @@ class App(_AppBase):
         if not owner_url:
             self.global_msg.configure(
                 text="⚠️ Choisissez d'abord le propriétaire des vidéos.",
-                text_color="#f59e0b")
+                text_color=T_ALERTE)
             self._choose_upload_owner()
             return
 
         type_title = self.type_combo.get()
         type_url = self.type_map.get(type_title, "")
         if not type_url:
-            self.global_msg.configure(text="Sélectionnez un type valide.", text_color="#f59e0b")
+            self.global_msg.configure(text="Sélectionnez un type valide.", text_color=T_ALERTE)
             return
 
         # Mémorise propriétaire et type pour une éventuelle relance des échecs.
@@ -718,7 +755,7 @@ class App(_AppBase):
             self._ui(self.global_msg.configure,
                      text=f"⏳ Finalisation côté serveur (gros fichier)… vérification, "
                           f"{remaining//60} min {remaining%60}s restantes",
-                     text_color="#f59e0b")
+                     text_color=T_ALERTE)
             _t.sleep(cfg.CHUNK_VERIFY_INTERVAL_S)
         return None
 
@@ -974,7 +1011,7 @@ class App(_AppBase):
         self.retry_btn.configure(state="normal")
         self.file_progress.set(0)
         self.file_progress_lbl.configure(text="")
-        color = "#22c55e" if ok == total else "#f59e0b"
+        color=T_SUCCES if ok == total else "#f59e0b"
         self.global_msg.configure(text=f"Terminé : {ok}/{total} vidéo(s) téléversée(s).", text_color=color)
         self._log(f"Lot terminé : {ok}/{total} réussis.")
 
@@ -1000,7 +1037,7 @@ class App(_AppBase):
         type_url = getattr(self, "_last_type_url", "") or self.type_map.get(self.type_combo.get(), "")
         if not owner_url or not type_url:
             self.global_msg.configure(text="Propriétaire ou type manquant pour la relance.",
-                                      text_color="#f59e0b")
+                                      text_color=T_ALERTE)
             return
         # Remet les échecs en « en attente » pour un affichage propre.
         for it in self.items:
@@ -1043,17 +1080,17 @@ class App(_AppBase):
 
         btn_row = ctk.CTkFrame(api_box, fg_color="transparent")
         btn_row.grid(row=3, column=1, columnspan=2, padx=8, pady=10, sticky="w")
-        ctk.CTkButton(btn_row, text="🔌  Tester & se connecter", fg_color="#16a34a",
-                      hover_color="#15803d", command=self._connect).pack(side="left")
+        ctk.CTkButton(btn_row, text="🔌  Tester & se connecter", fg_color=C_SUCCES,
+                      hover_color=C_SUCCES_SURV, command=self._connect).pack(side="left")
         ctk.CTkButton(btn_row, text="🚪  Oublier le token / Se déconnecter", width=260,
-                      fg_color="gray35", hover_color="#7f1d1d",
+                      fg_color=C_NEUTRE, hover_color=C_DESTR_SURV,
                       command=self._forget_token).pack(side="left", padx=10)
         api_box.columnconfigure(1, weight=1)
 
         self.config_msg = ctk.CTkLabel(frame, text="", font=ctk.CTkFont(size=12))
         self.config_msg.pack(anchor="w", pady=4)
 
-        ctk.CTkFrame(frame, height=1, fg_color="gray30").pack(fill="x", pady=8)
+        ctk.CTkFrame(frame, height=1, fg_color=C_NEUTRE).pack(fill="x", pady=8)
 
         # — Agent déposant —
         agent_box = ctk.CTkFrame(frame)
@@ -1062,7 +1099,7 @@ class App(_AppBase):
                      font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=3,
                                                            padx=12, pady=(12, 2), sticky="w")
         ctk.CTkLabel(agent_box, text="Les vidéos déposées appartiendront à ce compte Pod.",
-                     text_color="gray70", font=ctk.CTkFont(size=11)).grid(
+                     text_color=T_SECONDAIRE, font=ctk.CTkFont(size=11)).grid(
             row=1, column=0, columnspan=3, padx=12, pady=(0, 6), sticky="w")
 
         self.agent_filter = ctk.CTkEntry(agent_box, width=300,
@@ -1081,7 +1118,7 @@ class App(_AppBase):
         agent_box.columnconfigure(1, weight=1)
 
         # — Aide token —
-        help_box = ctk.CTkFrame(frame, fg_color="gray18", corner_radius=8)
+        help_box = ctk.CTkFrame(frame, fg_color=S_CARTE, corner_radius=8)
         help_box.pack(fill="x", pady=8)
         ctk.CTkLabel(help_box, text="ℹ️  Obtenir le token",
                      font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=14, pady=(10, 2))
@@ -1092,7 +1129,7 @@ class App(_AppBase):
                  "⚠️ Le token hérite des droits du compte associé. Il est stocké chiffré "
                  "dans le coffre-fort de votre système (Keychain / Credential Manager), "
                  "par poste — jamais dans l'application.",
-            justify="left", text_color="gray70", wraplength=820).pack(anchor="w", padx=14, pady=(0, 12))
+            justify="left", text_color=T_SECONDAIRE, wraplength=820).pack(anchor="w", padx=14, pady=(0, 12))
 
     def _forget_token(self):
         """Efface le token de ce poste et se déconnecte."""
@@ -1109,7 +1146,7 @@ class App(_AppBase):
         self._set_status(False)
         self.config_msg.configure(
             text="🚪  Token effacé de ce poste. Saisissez-le à nouveau pour vous reconnecter.",
-            text_color="#f59e0b")
+            text_color=T_ALERTE)
         self._log("Token effacé du poste — déconnexion.")
 
     def _connect(self):
@@ -1117,7 +1154,7 @@ class App(_AppBase):
         url = self.url_entry.get().strip()
         token = self.token_entry.get().strip()
         if not url or not token:
-            self.config_msg.configure(text="URL et token requis.", text_color="#ef4444")
+            self.config_msg.configure(text="URL et token requis.", text_color=T_ERREUR)
             return
         self.config_msg.configure(text="⏳  Connexion…", text_color="gray")
         self._run(self._do_connect, url, token)
@@ -1129,7 +1166,7 @@ class App(_AppBase):
             count = api.test_connection()
             self._ui(self._on_connected, api, url, token, count)
         except Exception as e:
-            self._ui(self.config_msg.configure, text=f"❌  Échec : {e}", text_color="#ef4444")
+            self._signaler(self.config_msg, e, "Connexion")
             self._ui(self._set_status, False)
             # Assistant de première utilisation : remonter l'erreur dans sa fenêtre.
             if self._post_connect_err:
@@ -1144,7 +1181,7 @@ class App(_AppBase):
         cfg.save_config(self.config_data)
         self._set_status(True)
         self.config_msg.configure(text=f"✅  Connecté — {count} vidéo(s) accessibles.",
-                                  text_color="#22c55e")
+                                  text_color=T_SUCCES)
         self._run(self._load_types)
         self._run(self._load_all_users)
         self._run(self._resolve_vehicle_owner)   # URL Pod de DEPOT (pour la vérif post-504)
@@ -1236,10 +1273,10 @@ class App(_AppBase):
                      font=ctk.CTkFont(size=18, weight="bold")).pack(pady=(4, 0))
         ctk.CTkLabel(win, text="Étape 1 sur 2 — Connexion",
                      font=ctk.CTkFont(size=12, weight="bold"),
-                     text_color="#3b82f6").pack(pady=(2, 0))
+                     text_color=T_SECONDAIRE).pack(pady=(2, 0))
         ctk.CTkLabel(win, text="Collez le token fourni par le service informatique,\n"
                               "puis cliquez sur « Se connecter ».",
-                     justify="center", text_color="gray80",
+                     justify="center", text_color=T_SECONDAIRE,
                      font=ctk.CTkFont(size=12)).pack(pady=(2, 10))
 
         form = ctk.CTkFrame(win, fg_color="transparent")
@@ -1247,7 +1284,7 @@ class App(_AppBase):
 
         # — Adresse de l'instance (pré-remplie, discrète) —
         ctk.CTkLabel(form, text="Adresse (déjà renseignée) :",
-                     text_color="gray60", font=ctk.CTkFont(size=11)).pack(anchor="w")
+                     text_color=T_DISCRET, font=ctk.CTkFont(size=11)).pack(anchor="w")
         url_entry = ctk.CTkEntry(form)
         url_entry.insert(0, self.config_data.get("url", "https://videos.utoulouse.fr"))
         url_entry.pack(fill="x", pady=(0, 8))
@@ -1273,7 +1310,7 @@ class App(_AppBase):
             token = token_entry.get().strip()
             if not url or not token:
                 msg.configure(text="Merci de coller le token avant de continuer.",
-                              text_color="#ef4444")
+                              text_color=T_ERREUR)
                 return
             msg.configure(text="⏳  Connexion…", text_color="gray")
 
@@ -1288,8 +1325,9 @@ class App(_AppBase):
                 self._show_tab("upload")
 
             def on_err(e):
-                msg.configure(text=f"❌  Échec : {e}\nVérifiez le token et réessayez.",
-                              text_color="#ef4444")
+                msg.configure(text=f"❌  {message_utilisateur(e)}",
+                              text_color=T_ERREUR)
+                self._log(f"Assistant de connexion : {e.__class__.__name__}: {e}")
 
             self._post_connect_ok = on_ok
             self._post_connect_err = on_err
@@ -1313,11 +1351,11 @@ class App(_AppBase):
         btns = ctk.CTkFrame(win, fg_color="transparent")
         btns.pack(fill="x", padx=24, pady=(4, 12))
         ctk.CTkButton(btns, text="Se connecter", height=40,
-                      fg_color="#16a34a", hover_color="#15803d",
+                      fg_color=C_SUCCES, hover_color=C_SUCCES_SURV,
                       font=ctk.CTkFont(size=14, weight="bold"),
                       command=do_connect).pack(fill="x")
         ctk.CTkButton(btns, text="Configurer manuellement", height=30,
-                      fg_color="transparent", text_color="gray60",
+                      fg_color="transparent", text_color=T_DISCRET,
                       hover_color=("gray80", "gray25"),
                       font=ctk.CTkFont(size=11), command=manual).pack(fill="x", pady=(6, 0))
 
@@ -1330,7 +1368,7 @@ class App(_AppBase):
         """Met à jour l'indicateur de connexion (pastille + libellé) de la barre latérale."""
         self.status_dot.configure(text="🟢" if ok else "🔴")
         self.status_lbl.configure(text="Connecté" if ok else "Non connecté",
-                                  text_color="#22c55e" if ok else "#ef4444")
+                                  text_color=T_SUCCES if ok else "#ef4444")
 
     def _load_types(self):
         """(Thread) Charge les types de vidéo et les sites (champ requis à l'upload)."""
@@ -1359,7 +1397,7 @@ class App(_AppBase):
         """(Thread) Charge tous les comptes Pod (paginé) et rafraîchit les vues qui en dépendent."""
         if not self.api:
             self._ui(self.users_count_lbl.configure,
-                     text="Connectez-vous d'abord.", text_color="#f59e0b")
+                     text="Connectez-vous d'abord.", text_color=T_ALERTE)
             return
         self._ui(self.users_count_lbl.configure,
                  text="⏳  Chargement de la liste des utilisateurs…", text_color="gray")
@@ -1382,17 +1420,17 @@ class App(_AppBase):
             if users:
                 self._ui(self.users_count_lbl.configure,
                          text=f"✅  {len(users)} utilisateur(s) chargé(s). Filtrez puis cliquez pour choisir.",
-                         text_color="#22c55e")
+                         text_color=T_SUCCES)
                 self._ui(self._log, f"Utilisateurs chargés : {len(users)}.")
             else:
                 self._ui(self.users_count_lbl.configure,
                          text="⚠️  Aucun utilisateur renvoyé. Le compte du token n'a peut-être "
                               "pas le droit de lister les utilisateurs (compte superutilisateur requis).",
-                         text_color="#f59e0b")
+                         text_color=T_ALERTE)
                 self._ui(self._log, "⚠️ /rest/users/ a renvoyé 0 utilisateur — vérifiez les droits du token "
                                     "(ou lancez verifier.py).")
         except Exception as e:
-            self._ui(self.users_count_lbl.configure, text=f"❌  Erreur : {e}", text_color="#ef4444")
+            self._signaler(self.users_count_lbl, e, "Chargement des utilisateurs")
             self._ui(self._log, f"❌ Erreur chargement utilisateurs : {e}")
 
     def _user_label(self, u: dict) -> str:
@@ -1449,7 +1487,7 @@ class App(_AppBase):
         cfg.save_config(self.config_data)
         self.agent_lbl.configure(text=f"Dépôt au nom de :\n{user.get('username','')}")
         self.config_msg.configure(
-            text=f"✅  Propriétaire des vidéos : {user.get('username','')}", text_color="#22c55e")
+            text=f"✅  Propriétaire des vidéos : {user.get('username','')}", text_color=T_SUCCES)
         if hasattr(self, "agent_results"):
             self._render_users()   # met à jour la coche ✅
         self._refresh_owner_status()   # met à jour l'état dans l'onglet Téléversement
@@ -1553,12 +1591,34 @@ class App(_AppBase):
         top = ctk.CTkFrame(frame, fg_color="transparent")
         top.pack(fill="x", pady=(0, 8))
         ctk.CTkLabel(top, text="📋  Journal", font=ctk.CTkFont(size=20, weight="bold")).pack(side="left")
-        ctk.CTkButton(top, text="🗑 Effacer", width=100, fg_color="gray35",
-                      hover_color="gray28", command=self._clear_log).pack(side="right")
+        ctk.CTkButton(top, text="🗑 Effacer", width=100, fg_color=C_NEUTRE,
+                      hover_color=C_NEUTRE_SURV, command=self._clear_log).pack(side="right")
         self.log_box = ctk.CTkTextbox(frame, font=ctk.CTkFont(family="Consolas", size=11))
         self.log_box.pack(fill="both", expand=True)
         self.log_box.configure(state="disabled")
         self._log("Application démarrée.")
+
+    def _signaler(self, widget, e: Exception, contexte: str = ""):
+        """Affiche une erreur COMPRÉHENSIBLE et journalise le DÉTAIL technique.
+
+        Les utilisateurs sont des enseignants : « HTTPSConnectionPool(host=…):
+        Max retries exceeded » ne leur dit ni ce qui s'est passé, ni quoi faire.
+        Un seul appel pour les deux, afin qu'on ne puisse plus faire l'un sans
+        l'autre. Sûre depuis un thread : l'affichage passe par `_ui`.
+        """
+        try:
+            self._ui(widget.configure, text=f"❌  {message_utilisateur(e)}",
+                     text_color=T_ERREUR)
+        except Exception:
+            pass
+        detail = f"{e.__class__.__name__}: {e}"
+        statut = getattr(e, "status", 0)
+        if statut:
+            detail += f"  [HTTP {statut}]"
+        corps = (getattr(e, "body", "") or "").strip().replace("\n", " ")
+        if corps:
+            detail += f"  corps={corps[:300]}"
+        self._log(f"{contexte + ' : ' if contexte else ''}{detail}")
 
     def _log(self, msg: str):
         """Ajoute une ligne horodatée au journal."""
@@ -1615,18 +1675,18 @@ class App(_AppBase):
         ctk.CTkLabel(win, text="Pod Téléverseur",
                      font=ctk.CTkFont(size=20, weight="bold")).pack(pady=(6, 0))
         ctk.CTkLabel(win, text=f"version {__version__}",
-                     font=ctk.CTkFont(size=12), text_color="gray70").pack(pady=(0, 10))
+                     font=ctk.CTkFont(size=12), text_color=T_SECONDAIRE).pack(pady=(0, 10))
 
         # — Description courte —
         ctk.CTkLabel(
             win,
             text="Téléversement par lot de vidéos vers l'instance\n"
                  "Esup-Pod de l'Université de Toulouse.",
-            justify="center", text_color="gray80",
+            justify="center", text_color=T_SECONDAIRE,
             font=ctk.CTkFont(size=12)).pack(pady=(0, 12))
 
         # — Bloc « Développé par » : les trois auteurs, un par ligne —
-        dev = ctk.CTkFrame(win, fg_color="gray18", corner_radius=8)
+        dev = ctk.CTkFrame(win, fg_color=S_CARTE, corner_radius=8)
         dev.pack(fill="x", padx=20, pady=(0, 8))
         ctk.CTkLabel(dev, text="Développé par",
                      font=ctk.CTkFont(size=11, weight="bold")).pack(pady=(8, 2))
@@ -1634,11 +1694,11 @@ class App(_AppBase):
         # affiche un par ligne pour une lecture claire.
         for nom in [a.strip() for a in __author__.split(",") if a.strip()]:
             ctk.CTkLabel(dev, text=nom, font=ctk.CTkFont(size=12),
-                         text_color="gray85").pack(pady=0)
+                         text_color=T_SECONDAIRE).pack(pady=0)
         ctk.CTkLabel(dev, text="", height=4).pack()   # petite marge basse
 
         # — Informations (lignes « étiquette : valeur ») —
-        info = ctk.CTkFrame(win, fg_color="gray18", corner_radius=8)
+        info = ctk.CTkFrame(win, fg_color=S_CARTE, corner_radius=8)
         info.pack(fill="x", padx=20)
         lignes = [
             ("Établissement", __institution__),
@@ -1652,7 +1712,7 @@ class App(_AppBase):
                          font=ctk.CTkFont(size=11, weight="bold")).grid(
                 row=i, column=0, padx=(12, 6), pady=4, sticky="e")
             ctk.CTkLabel(info, text=val, anchor="w",
-                         font=ctk.CTkFont(size=11), text_color="gray80",
+                         font=ctk.CTkFont(size=11), text_color=T_SECONDAIRE,
                          wraplength=270, justify="left").grid(
                 row=i, column=1, padx=(0, 12), pady=4, sticky="w")
         info.columnconfigure(1, weight=1)
@@ -1684,7 +1744,7 @@ class App(_AppBase):
         ctk.CTkLabel(win, text="❓  Aide — Pod Téléverseur",
                      font=ctk.CTkFont(size=18, weight="bold")).pack(pady=(14, 2))
         ctk.CTkLabel(win, text="Guide des fonctions, de la connexion au dépôt des vidéos.",
-                     text_color="gray70", font=ctk.CTkFont(size=12)).pack(pady=(0, 8))
+                     text_color=T_SECONDAIRE, font=ctk.CTkFont(size=12)).pack(pady=(0, 8))
 
         # Zone défilable qui contiendra toutes les rubriques
         body = ctk.CTkScrollableFrame(win, fg_color="transparent")
@@ -1839,13 +1899,13 @@ class App(_AppBase):
 
         # Rendu automatique des sections (titre en gras + paragraphe justifié).
         for titre, texte in sections:
-            bloc = ctk.CTkFrame(body, fg_color="gray18", corner_radius=8)
+            bloc = ctk.CTkFrame(body, fg_color=S_CARTE, corner_radius=8)
             bloc.pack(fill="x", pady=6)
             ctk.CTkLabel(bloc, text=titre, anchor="w",
                          font=ctk.CTkFont(size=14, weight="bold")).pack(
                 fill="x", padx=12, pady=(10, 2))
             ctk.CTkLabel(bloc, text=texte, anchor="w", justify="left",
-                         wraplength=560, text_color="gray85",
+                         wraplength=560, text_color=T_SECONDAIRE,
                          font=ctk.CTkFont(size=12)).pack(fill="x", padx=12, pady=(0, 12))
 
         # Bouton Fermer
@@ -1931,12 +1991,12 @@ class OwnerPicker(ctk.CTkToplevel):
         if self.single:
             # En sélection unique, un clic sur un compte valide directement :
             # le bouton « Valider » est inutile, on ne garde qu'« Annuler ».
-            ctk.CTkButton(btns, text="Annuler", fg_color="gray35", hover_color="gray28",
+            ctk.CTkButton(btns, text="Annuler", fg_color=C_NEUTRE, hover_color=C_NEUTRE_SURV,
                           command=self.destroy).pack(side="right")
         else:
-            ctk.CTkButton(btns, text="Valider", fg_color="#16a34a", hover_color="#15803d",
+            ctk.CTkButton(btns, text="Valider", fg_color=C_SUCCES, hover_color=C_SUCCES_SURV,
                           command=self._validate).pack(side="right")
-            ctk.CTkButton(btns, text="Annuler", fg_color="gray35", hover_color="gray28",
+            ctk.CTkButton(btns, text="Annuler", fg_color=C_NEUTRE, hover_color=C_NEUTRE_SURV,
                           command=self.destroy).pack(side="right", padx=8)
 
         self.after(80, self._init_list)
@@ -1961,7 +2021,10 @@ class OwnerPicker(ctk.CTkToplevel):
                 self.after(0, self._render)
                 self.after(0, self._update_chosen)
             except Exception as e:
-                self.after(0, lambda: self.count_lbl.configure(text=f"Erreur : {e}", text_color="#ef4444"))
+                # `exc=e` capture la valeur : sans cela, la variable aurait
+                # pu changer avant l'exécution différée.
+                self.after(0, lambda exc=e: self.count_lbl.configure(
+                    text=f"❌  {message_utilisateur(exc)}", text_color=T_ERREUR))
         threading.Thread(target=work, daemon=True).start()
 
     def _label(self, u: dict) -> str:
@@ -2020,7 +2083,7 @@ class OwnerPicker(ctk.CTkToplevel):
         """Met à jour le libellé récapitulant la sélection courante."""
         if self.selected:
             self.chosen_lbl.configure(text="Sélection : " + ", ".join(self.selected.values()),
-                                      text_color="#22c55e")
+                                      text_color=T_SUCCES)
         else:
             self.chosen_lbl.configure(text="Sélection : aucun", text_color="gray")
 
@@ -2035,7 +2098,7 @@ class OwnerPicker(ctk.CTkToplevel):
 # ════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    ctk.set_appearance_mode("dark")
+    ctk.set_appearance_mode(cfg.load_theme())
     ctk.set_default_color_theme("blue")
     app = App()
     app.mainloop()
