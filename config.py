@@ -15,7 +15,7 @@ from __future__ import annotations
 __author__      = "Cédric MONNA, Philippe BAQUÉ, Michel JACOB"
 __contact__     = "support-pod@utoulouse.fr"
 __institution__ = "Université de Toulouse"
-__version__     = "2.1.0"
+from __version__ import __version__   # source unique (voir __version__.py)
 __date__        = "2026"
 __license__     = "Usage interne — Université de Toulouse"
 
@@ -195,3 +195,23 @@ VIDEO_EXTENSIONS = {
     ".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v",
     ".wmv", ".flv", ".mpg", ".mpeg", ".ts", ".mts",
 }
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  MISE À JOUR
+# ════════════════════════════════════════════════════════════════════════════
+# Fichier consulté au démarrage pour savoir si une version plus récente existe.
+#
+# Il est hébergé sur un dépôt PUBLIC distinct (podteleverseur-releases), et non
+# sur le dépôt du code, qui est privé : un enseignant n'a évidemment pas accès
+# à ce dernier, et la page de téléchargement doit lui rester accessible sans
+# compte GitHub.
+#
+# Le workflow de compilation réécrit ce fichier à chaque publication : il n'y a
+# rien à modifier à la main.
+UPDATE_URL = ("https://raw.githubusercontent.com/"
+              "caine777-data/podteleverseur-releases/main/version.json")
+
+# Délai maximal accordé à la vérification. Volontairement court : elle ne doit
+# JAMAIS retarder le démarrage, ni l'empêcher si le réseau est lent ou coupé.
+UPDATE_TIMEOUT_S = 5

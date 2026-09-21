@@ -195,3 +195,20 @@ périmètre.
 ```bash
 python -m pytest tests/ -q
 ```
+
+## Mises à jour
+
+L'application consulte au démarrage — en arrière-plan, sans jamais retarder
+l'ouverture — le fichier `version.json` du dépôt public
+`podteleverseur-releases`. Si une version plus récente existe, un bandeau
+apparaît en pied de barre latérale avec un bouton « Télécharger ».
+
+La mise en place (dépôt public, jeton, secret) est décrite dans
+**`MISE_EN_PLACE_MISES_A_JOUR.md`**.
+
+⚠️ **La version n'est définie qu'à UN endroit : `__version__.py`.** Elle était
+auparavant écrite dans l'en-tête de chaque fichier ; en 2.1.0, elle a été
+modifiée dans `config.py` mais pas dans `app.py`, qui fait foi — l'application
+se serait crue éternellement en 2.0.0 et aurait signalé en permanence une mise à
+jour vers elle-même. `version.txt` (exécutable Windows) doit concorder : un test
+le vérifie.

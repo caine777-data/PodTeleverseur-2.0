@@ -17,6 +17,15 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Écrire OUI pour PUBLIER une version (le numéro est lu dans __version__.py). Laisser VIDE = compilation d'essai."
+        required: false
+        default: ""
+      notes:
+        description: "Phrase affichée dans le bandeau de mise à jour (facultatif)"
+        required: false
+        default: ""
 
 jobs:
   # ─────────────────────────────── WINDOWS ───────────────────────────────
@@ -163,15 +172,89 @@ jobs:
   release:
     needs: [build-windows, build-macos]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Publication sur tag v*, OU sur « Run workflow » avec le champ version
+    # rempli. Champ vide = compilation d'essai, rien n'est publié.
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.version != ''
+    # Le jeton automatique de GitHub Actions est en LECTURE SEULE par défaut :
+    # sans cette autorisation, la création de la Release échoue en 403.
+    permissions:
+      contents: write
     steps:
+      # ORDRE IMPORTANT : le checkout d'abord, car il NETTOIE le dossier de
+      # travail. Placé après, il supprimerait les artefacts téléchargés.
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
 
-      - name: Créer la Release et joindre les 4 livrables
+      # Le numéro vient du CODE (__version__.py), jamais du formulaire : sinon
+      # l'application pourrait s'annoncer dans une version et en afficher une
+      # autre, et signaler en permanence une mise à jour… vers elle-même.
+      - name: Déterminer le numéro de version (depuis le code)
+        id: v
+        shell: bash
+        run: |
+          NUM=$(grep -oE '__version__[[:space:]]*=[[:space:]]*"[^"]+"' __version__.py | grep -oE '"[^"]+"' | tr -d '"')
+          if [ -z "$NUM" ]; then
+            echo "::error::Impossible de lire la version dans __version__.py"
+            exit 1
+          fi
+          echo "num=$NUM" >> "$GITHUB_OUTPUT"
+          echo "Version publiée (lue dans le code) : $NUM"
+
+      # La Release est publiée sur le dépôt PUBLIC, et non sur ce dépôt privé :
+      # le bouton « Télécharger » du bandeau renvoie vers lui. Publier ici
+      # donnerait une page inaccessible (404) à tout enseignant.
+      #
+      # L'écriture se fait avec RELEASES_TOKEN : le jeton automatique de
+      # GitHub Actions n'a aucun droit en dehors de ce dépôt-ci.
+      - name: Créer la release sur le dépôt public
         uses: softprops/action-gh-release@v2
         with:
+          repository: ${{ vars.RELEASES_REPO || format('{0}/podteleverseur-releases', github.repository_owner) }}
+          token: ${{ secrets.RELEASES_TOKEN }}
+          tag_name: v${{ steps.v.outputs.num }}
+          name: Pod Téléverseur v${{ steps.v.outputs.num }}
+          body: ${{ inputs.notes || 'Nouvelle version.' }}
           files: |
             PodTeleverseur-Windows-Setup/PodTeleverseur-Setup.exe
             PodTeleverseur-Windows-portable/PodTeleverseur.exe
             PodTeleverseur-macOS-DMG/PodTeleverseur.dmg
             PodTeleverseur-macOS-ZIP/PodTeleverseur-macOS.zip
+
+      # ── Notification de mise à jour ────────────────────────────────────
+      # Écrit `version.json` sur le dépôt PUBLIC. C'est ce fichier que les
+      # applications installées consultent au démarrage.
+      #
+      # Sans le secret RELEASES_TOKEN, l'étape est IGNORÉE : la compilation se
+      # déroule normalement, seule la notification n'est pas publiée.
+      - name: Publier version.json sur le dépôt public
+        if: env.RELEASES_TOKEN != ''
+        env:
+          RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          DEPOT_PUBLIC: ${{ vars.RELEASES_REPO }}
+        run: |
+          set -e
+          VERSION="${{ steps.v.outputs.num }}"
+          DEPOT="${DEPOT_PUBLIC:-${GITHUB_REPOSITORY_OWNER}/podteleverseur-releases}"
+          NOTES="${{ inputs.notes }}"
+          [ -z "$NOTES" ] && NOTES="Nouvelle version disponible."
+
+          cat > version.json <<EOF
+          {
+            "version": "$VERSION",
+            "url": "https://github.com/$DEPOT/releases/latest",
+            "notes": "$NOTES",
+            "version_minimale": ""
+          }
+          EOF
+          echo "Contenu publié :" && cat version.json
+
+          git clone --depth 1 \
+            "https://x-access-token:${RELEASES_TOKEN}@github.com/${DEPOT}.git" public
+          cp version.json public/version.json
+          cd public
+          git config user.name  "github-actions"
+          git config user.email "github-actions@github.com"
+          git add version.json
+          git diff --cached --quiet || git commit -m "Version $VERSION"
+          git push

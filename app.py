@@ -17,7 +17,7 @@ from __future__ import annotations
 __author__      = "Cédric MONNA, Philippe BAQUÉ, Michel JACOB"
 __contact__     = "support-pod@utoulouse.fr"
 __institution__ = "Université de Toulouse"
-__version__     = "2.0.0"
+from __version__ import __version__   # source unique (voir __version__.py)
 __date__        = "2026"
 __copyright__   = "© Copyright 2026 Cédric MONNA"
 __license__     = ("Tous droits réservés — réutilisation, diffusion ou "
@@ -33,6 +33,7 @@ import customtkinter as ctk
 from tkinter import filedialog, messagebox
 
 import config as cfg
+import maj                     # vérification de mise à jour (dépôt public)
 # Apparence et messages PARTAGÉS avec PodAdmin et le Téléverseur v3.
 from theme import *                                    # noqa: F401,F403
 from theme import message_utilisateur, etat_vide, verifier_palette  # noqa: F401
@@ -157,6 +158,13 @@ class App(_AppBase):
         self._post_connect_ok = None    # appelé après une connexion réussie
         self._post_connect_err = None   # appelé après un échec de connexion
 
+        # Bandeau « nouvelle version disponible » : AUCUN widget n'est créé
+        # ici. Il est construit de toutes pièces le jour où une mise à jour est
+        # détectée. Un conteneur vide réservé d'avance se dessinait en CARRÉ
+        # NOIR sur macOS et amputait la barre latérale sous Windows — défaut
+        # rencontré et corrigé dans PodAdmin.
+        self.maj_bandeau = None
+
         self._build_ui()
         self._show_tab("upload")
 
@@ -168,6 +176,11 @@ class App(_AppBase):
             self._run(self._auto_connect)
         elif not self.token:
             self.after(300, self._first_run_wizard)
+
+        # Vérification de mise à jour, DIFFÉRÉE de deux secondes et menée en
+        # arrière-plan : elle ne doit jamais retarder l'ouverture de la fenêtre,
+        # ni gêner l'assistant de premier lancement.
+        self.after(2000, self._verifier_maj)
 
     # ── Threading helpers ────────────────────────────────────────────────
 
@@ -1597,6 +1610,116 @@ class App(_AppBase):
         self.log_box.pack(fill="both", expand=True)
         self.log_box.configure(state="disabled")
         self._log("Application démarrée.")
+
+    def _verifier_maj(self):
+        """Lance la vérification de mise à jour en ARRIÈRE-PLAN.
+
+        Appelée peu après le démarrage. Tout se passe dans un thread : si le
+        réseau est absent ou le serveur injoignable, l'application n'attend rien
+        et l'utilisateur ne voit rien."""
+        def travail():
+            """(Thread) Interroge le fichier de version publié."""
+            def tracer(message):
+                """Consigne un échec de vérification dans le Journal.
+
+                Sans cette trace, une panne était indétectable : la vérification
+                échouait en silence et l'utilisateur ne voyait simplement jamais
+                de bandeau, sans pouvoir en connaître la raison."""
+                self._ui(self._log, f"ℹ Mise à jour — {message}")
+
+            try:
+                info = maj.etat_mise_a_jour(
+                    APP_VERSION,
+                    getattr(cfg, "UPDATE_URL", ""),
+                    getattr(cfg, "UPDATE_TIMEOUT_S", 5),
+                    journal=tracer)
+            except Exception as e:
+                info = None              # jamais bloquant
+                self._ui(self._log, f"ℹ Mise à jour — vérification interrompue : {e}")
+            if info:
+                self._ui(self._afficher_bandeau_maj, info)
+            else:
+                # Cas normal le plus fréquent : on est à jour. On le note
+                # discrètement pour confirmer que la vérification a bien eu lieu.
+                self._ui(self._log,
+                         f"ℹ Mise à jour — version {APP_VERSION} : aucune plus récente.")
+        self._run(travail)
+
+    def _afficher_bandeau_maj(self, info: dict):
+        """Affiche le bandeau annonçant une nouvelle version.
+
+        Volontairement NON bloquant, même quand la version installée est
+        périmée : le ton se durcit (couleur, libellé), mais l'application reste
+        pleinement utilisable. Empêcher quelqu'un de travailler à un mauvais
+        moment coûterait plus cher que le retard de mise à jour."""
+        urgent = bool(info.get("urgent"))
+        # Couples (clair, sombre) de la palette partagée, et non des teintes
+        # écrites seules : elles s'appliqueraient telles quelles aux deux
+        # thèmes. Le test de palette ne les verrait d'ailleurs pas, puisqu'elles
+        # transitent par une variable plutôt que par un paramètre `*_color`.
+        couleur = C_ALERTE if urgent else C_ACTION
+        # Texte blanc sur fond coloré : le fond étant le même dans les deux
+        # modes, le blanc aussi. Écrit en couple pour respecter la règle — une
+        # teinte seule ferait échouer le test de palette, à juste titre.
+        blanc = ("#ffffff", "#ffffff")
+        survol = ("#e5e7eb", "#e5e7eb")
+        titre = ("⚠️  Version obsolète" if urgent
+                 else f"⬆️  Version {info['version']} disponible")
+
+        # Un éventuel bandeau précédent est retiré avant d'en poser un nouveau.
+        if self.maj_bandeau is not None:
+            try:
+                self.maj_bandeau.destroy()
+            except Exception:
+                pass
+            self.maj_bandeau = None
+
+        # Le bandeau est créé DIRECTEMENT dans la barre latérale, sans cadre
+        # conteneur : c'est ce conteneur transparent qui apparaissait en carré
+        # noir sur macOS.
+        cadre = ctk.CTkFrame(self.sidebar, fg_color=couleur, corner_radius=6)
+        cadre.pack(side="bottom", fill="x", padx=8, pady=(0, 2))
+        self.maj_bandeau = cadre
+        ctk.CTkLabel(cadre, text=titre, font=ctk.CTkFont(size=11, weight="bold"),
+                     text_color=blanc, wraplength=190,
+                     justify="left").pack(anchor="w", padx=8, pady=(6, 2))
+        if urgent:
+            ctk.CTkLabel(cadre,
+                         text=f"La version {info['version']} corrige un point important. "
+                              "Mettez à jour dès que possible.",
+                         font=ctk.CTkFont(size=10), text_color=blanc,
+                         wraplength=190, justify="left").pack(anchor="w", padx=8)
+        elif info.get("notes"):
+            ctk.CTkLabel(cadre, text=info["notes"], font=ctk.CTkFont(size=10),
+                         text_color=blanc, wraplength=190,
+                         justify="left").pack(anchor="w", padx=8)
+        if info.get("url"):
+            # Bouton clair sur fond coloré. Les couleurs sont données en
+            # hexadécimal plutôt que par leur nom : les noms symboliques
+            # (« white », « gray90 ») ne sont pas rendus de la même façon
+            # partout, et macOS s'en accommode mal.
+            ctk.CTkButton(cadre, text="Télécharger", height=26,
+                          fg_color=blanc, text_color=couleur,
+                          hover_color=survol,
+                          font=ctk.CTkFont(size=11, weight="bold"),
+                          command=lambda u=info["url"]: self._ouvrir_lien_maj(u)
+                          ).pack(fill="x", padx=8, pady=(6, 8))
+        else:
+            # Simple marge basse. On ajuste l'espacement du dernier libellé
+            # plutôt que d'ajouter un widget vide, qui pouvait laisser une
+            # trace visible sur certains systèmes.
+            cadre.configure(height=0)      # laisse le contenu fixer la hauteur
+        self._log(f"⬆️ Version {info['version']} disponible"
+                  + (" (mise à jour recommandée sans délai)." if urgent else "."))
+
+    def _ouvrir_lien_maj(self, url: str):
+        """Ouvre la page de téléchargement de la nouvelle version."""
+        try:
+            import webbrowser
+            webbrowser.open(url)
+            self._log("Page de téléchargement ouverte.")
+        except Exception as e:
+            self._log(f"❌ Ouverture du lien de mise à jour : {e}")
 
     def _signaler(self, widget, e: Exception, contexte: str = ""):
         """Affiche une erreur COMPRÉHENSIBLE et journalise le DÉTAIL technique.
