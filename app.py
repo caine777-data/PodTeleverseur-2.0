@@ -64,6 +64,11 @@ except Exception:
 APP_TITLE = "Pod Téléverseur — Université de Toulouse"
 APP_VERSION = __version__
 
+# Texte de la fenêtre de mise à jour OBLIGATOIRE. Volontairement neutre : il
+# ne donne jamais la raison du blocage (voir `_bloquer_demarrage`).
+MESSAGE_BLOCAGE = ("Une nouvelle version de Pod Téléverseur est nécessaire "
+                   "pour continuer. Téléchargez-la et installez-la.")
+
 
 # ════════════════════════════════════════════════════════════════════════════
 #  MODÈLE : une entrée de la file d'attente
@@ -1720,32 +1725,58 @@ class App(_AppBase):
         ni fiable pour ça (l'utilisateur garde la main sur son poste et sur le
         fichier `config.json`).
 
-        La fenêtre n'a NI croix fonctionnelle NI bouton d'annulation : la
-        croix est redirigée vers une fonction qui ne fait rien
-        (`WM_DELETE_WINDOW`), et aucun autre chemin de fermeture n'existe
-        avant que le lien de téléchargement soit ouvert. Elle est construite
-        directement ici plutôt qu'avec `_focus_toplevel` : cette dernière
-        laisse la fenêtre parent accessible dès que le focus quitte la
-        modale (Alt+Tab, clic sur une autre fenêtre), ce qui suffirait à
-        contourner un simple bandeau mais pas ce blocage."""
+        La fenêtre n'a PAS de bouton "Annuler" qui permettrait de revenir à
+        l'application normalement : le seul geste possible est de télécharger
+        la mise à jour, ou de QUITTER complètement l'application (bouton
+        dédié, et fermeture système normale — voir ⚠️ ci-dessous).
+
+        ⚠️ LEÇON D'UN INCIDENT RÉEL (à ne jamais reproduire) : une première
+        version de cette fenêtre appelait `win.focus_force()` en boucle
+        toutes les 400 ms, dans l'intention d'empêcher un simple Alt+Tab de
+        rendre la fenêtre principale utilisable en tâche de fond. En usage
+        réel sur Windows, cette boucle a empêché jusqu'à ALT+F4 de fonctionner
+        : la seule issue restante était de tuer le processus depuis le
+        gestionnaire de tâches. `grab_set()` SEUL suffit à empêcher toute
+        interaction avec le contenu de l'application pendant que la modale
+        est affichée — c'est son rôle documenté en Tkinter — sans jamais
+        interférer avec les raccourcis et contrôles du système
+        d'exploitation lui-même. Un blocage qui empêche même de FERMER
+        l'application est un risque plus grave que celui qu'il cherchait à
+        éviter : quelqu'un dans une situation urgente doit TOUJOURS pouvoir
+        au moins quitter proprement."""
         try:
             win = ctk.CTkToplevel(self)
             win.title("Mise à jour requise")
-            win.geometry("440x260")
+            # Centrée sur la fenêtre principale : ouverte en (0,0), elle
+            # passait inaperçue sur un grand écran, et l'appli semblait
+            # simplement figée. 260 px suffisent (mesuré : le bouton
+            # « Quitter » finit à 218 px).
+            largeur, hauteur = 440, 260
+            try:
+                self.update_idletasks()
+                x = self.winfo_rootx() + max(0, (self.winfo_width() - largeur) // 2)
+                y = self.winfo_rooty() + max(0, (self.winfo_height() - hauteur) // 2)
+                win.geometry(f"{largeur}x{hauteur}+{x}+{y}")
+            except Exception:
+                win.geometry(f"{largeur}x{hauteur}")
             win.resizable(False, False)
-            win.transient(self)
 
-            def ignorer():
-                pass                      # la croix ne fait RIEN
-            win.protocol("WM_DELETE_WINDOW", ignorer)
+            # La croix de CETTE fenêtre modale ferme l'application ENTIÈRE
+            # (comme le bouton "Quitter" ci-dessous), plutôt que de ne rien
+            # faire : ne rien faire du tout laisserait quelqu'un sans AUCUNE
+            # réaction visible à son clic, ce qui est déroutant et n'apporte
+            # rien — le blocage empêche déjà toute utilisation normale.
+            win.protocol("WM_DELETE_WINDOW", self._quitter_depuis_blocage)
 
             ctk.CTkLabel(win, text="⚠️  Mise à jour requise",
                          font=ctk.CTkFont(size=17, weight="bold"),
                          text_color=T_ERREUR).pack(pady=(24, 8))
-            texte = (info.get("notes") or "").strip() or (
-                "Cette version de Pod Téléverseur ne peut plus être utilisée "
-                "en l'état.")
-            ctk.CTkLabel(win, text=texte, wraplength=380, justify="center",
+            # Message FIXE et NEUTRE : la fenêtre de blocage ne donne jamais
+            # la raison de la mise à jour obligatoire. Le champ `notes` de
+            # version.json (saisi dans le formulaire de publication) n'est
+            # volontairement PAS affiché ici — il reste réservé au bandeau
+            # de mise à jour ordinaire.
+            ctk.CTkLabel(win, text=MESSAGE_BLOCAGE, wraplength=380, justify="center",
                          font=ctk.CTkFont(size=13)).pack(padx=24, pady=(0, 6))
             ctk.CTkLabel(
                 win,
@@ -1771,25 +1802,26 @@ class App(_AppBase):
                 command=lambda u=lien: self._ouvrir_lien_maj(u)
                 ).pack(fill="x", padx=32, pady=(0, 8))
 
-            # Focus forcé et repété : Alt+Tab ou un clic ailleurs ne doit pas
-            # rendre la fenêtre principale utilisable. `grab_set` capture les
-            # évènements clavier/souris pour l'application entière, mais un
-            # gestionnaire de fenêtres peut malgré tout faire passer le focus
-            # système ailleurs — d'où la reprise périodique ci-dessous.
-            win.lift()
-            win.attributes("-topmost", True)
-            win.after(150, win.focus_force)
-            win.after(200, win.grab_set)
+            # Issue TOUJOURS disponible : quitter proprement. Un blocage qui
+            # empêcherait même de fermer l'application serait plus dangereux
+            # que le risque qu'il cherche à prévenir (voir la note ⚠️ plus haut).
+            ctk.CTkButton(
+                win, text="Quitter", height=30,
+                fg_color="transparent", text_color=T_SECONDAIRE,
+                hover_color=("gray85", "gray25"),
+                font=ctk.CTkFont(size=12),
+                command=self._quitter_depuis_blocage
+                ).pack(fill="x", padx=32, pady=(0, 4))
 
-            def reprendre_le_focus():
-                try:
-                    if win.winfo_exists():
-                        win.lift()
-                        win.focus_force()
-                        win.after(400, reprendre_le_focus)
-                except Exception:
-                    pass
-            win.after(400, reprendre_le_focus)
+            # Mise au premier plan UNE SEULE FOIS, via le helper commun à
+            # toutes les fenêtres secondaires de l'appli : `-topmost` retiré
+            # après 150 ms, focus donné une fois, puis `grab_set` (qui empêche
+            # d'utiliser le contenu de l'application). Sans cette mise au
+            # premier plan, la fenêtre pouvait s'ouvrir DERRIÈRE la fenêtre
+            # principale : l'appli paraissait figée, sans message visible.
+            # ⚠️ Jamais de boucle qui reprend le focus : voir la leçon
+            # documentée ci-dessus (ALT+F4 rendu inopérant).
+            _focus_toplevel(win, self)
 
             self._log(f"⚠️ Mise à jour obligatoire : version {APP_VERSION} "
                       f"bloquée (minimum requis : {info.get('version', '?')}).")
@@ -1875,6 +1907,25 @@ class App(_AppBase):
             self._log("Page de téléchargement ouverte.")
         except Exception as e:
             self._log(f"❌ Ouverture du lien de mise à jour : {e}")
+
+    def _quitter_depuis_blocage(self):
+        """Ferme l'application ENTIÈRE depuis la fenêtre de blocage obligatoire.
+
+        Le blocage empêche d'UTILISER l'application, jamais de la FERMER :
+        c'est le seul geste toujours garanti, quoi qu'il arrive par ailleurs
+        (réseau, serveur, formulaire de publication mal rempli). Voir la note
+        d'incident dans `_bloquer_demarrage`.
+
+        `self.destroy()` sur la fenêtre RACINE ferme aussi ses enfants
+        (dont cette modale) — pas besoin de les détruire un par un."""
+        try:
+            self.destroy()
+        except Exception:
+            pass
+        try:
+            self.quit()          # ceinture et bretelles : sort de mainloop()
+        except Exception:
+            pass
 
     def _signaler(self, widget, e: Exception, contexte: str = ""):
         """Affiche une erreur COMPRÉHENSIBLE et journalise le DÉTAIL technique.

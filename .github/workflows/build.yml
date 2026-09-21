@@ -30,9 +30,9 @@ on:
         description: >-
           Rendre cette mise à jour OBLIGATOIRE : les postes en version
           antérieure afficheront une fenêtre bloquante (aucun bandeau) tant
-          qu'ils n'ont pas mis à jour. Réservé aux cas où continuer serait
-          dangereux (ex. rotation du mot de passe du compte véhicule) — voir
-          maj.py. Laisser décoché pour une publication normale.
+          qu'ils n'ont pas mis à jour. La fenêtre affiche un message neutre,
+          sans en donner la raison. Laisser décoché pour une publication
+          normale.
         required: false
         type: boolean
         default: false

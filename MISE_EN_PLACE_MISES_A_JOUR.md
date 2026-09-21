@@ -65,17 +65,16 @@ sert qu'à déclencher la publication.
 
 ## Étape 4 bis — Publication OBLIGATOIRE (fenêtre bloquante)
 
-⚠️ **À réserver aux cas où continuer à utiliser une ancienne version serait
-dangereux** (ex. rotation du mot de passe du compte véhicule, qui rend les
-anciennes versions incapables de téléverser les gros fichiers). Ce n'est PAS
-un outil de licence ou de contrôle d'accès général — un mauvais usage
-transformerait un incident réseau banal en blocage ressenti comme arbitraire.
+⚠️ **À réserver aux cas où les anciennes versions ne doivent plus être
+utilisées.**
 
 Onglet **Actions** → **Run workflow** :
 
 - **version** : `OUI`
-- **notes** : message clair expliquant POURQUOI la mise à jour est requise —
-  c'est ce texte que la personne bloquée verra, sans autre contexte
+- **notes** : facultatif. ⚠️ Ce texte n'apparaît PAS dans la fenêtre de
+  blocage, qui affiche toujours le même message neutre, sans raison :
+  « Une nouvelle version de Pod Téléverseur est nécessaire pour continuer.
+  Téléchargez-la et installez-la. »
 - **obligatoire** : **cocher**
 - **version_minimale** :
   - laisser **vide** → TOUT poste non encore sur cette version sera bloqué
@@ -87,9 +86,10 @@ Onglet **Actions** → **Run workflow** :
 ### Comportement côté poste enseignant
 
 1. **Poste connecté au moment du lancement** : le serveur confirme le
-   blocage → fenêtre modale immédiate, sans croix ni bouton d'annulation,
-   avec le lien de téléchargement. Ce blocage est alors **mémorisé
-   localement** sur ce poste.
+   blocage → fenêtre modale immédiate, message neutre, deux seules issues :
+   « Télécharger la mise à jour » ou « Quitter » (la croix et Alt+F4
+   quittent aussi). Ce blocage est alors **mémorisé localement** sur ce
+   poste.
 2. **Poste relancé plus tard, même SANS réseau** : le blocage **reste actif**
    — c'est volontaire, pour empêcher qu'une personne déjà notifiée contourne
    le blocage en coupant sa connexion. Le blocage ne se lève que par une

@@ -8,6 +8,8 @@ qui apparaît en permanence.
 import os
 import re
 
+import pytest
+
 RACINE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -454,6 +456,262 @@ class TestFenetreBloquanteAppelleLeVerrou:
             "interaction serait possible avant le blocage")
 
 
+class TestFermetureToujoursPossibleDepuisLeBlocage:
+    """⚠️ INCIDENT RÉEL rencontré en test manuel : une première version de la
+    fenêtre de blocage appelait `focus_force()` en boucle toutes les 400 ms,
+    dans le but d'empêcher un simple Alt+Tab de rendre la fenêtre principale
+    utilisable en tâche de fond.
+
+    En usage réel sur Windows, cette boucle a empêché jusqu'à ALT+F4 de
+    fonctionner : la seule issue restante était de tuer le processus depuis
+    le gestionnaire de tâches. Un blocage qui empêche même de FERMER
+    l'application est plus dangereux que le risque qu'il cherchait à éviter.
+
+    `grab_set()` seul suffit à empêcher toute interaction avec le CONTENU de
+    l'application ; il ne doit jamais être combiné à un `focus_force` répété,
+    qui interfère avec le système d'exploitation lui-même."""
+
+    @staticmethod
+    def _executer_dans_sous_processus(code_python: str):
+        """Exécute `code_python` dans un interpréteur PYTHON SÉPARÉ et
+        renvoie (code_retour, stdout).
+
+        ⚠️ Nécessaire pour ces tests précis : la fixture `app` du module
+        (scope="module") reste vivante pendant toute l'exécution du fichier
+        de tests. Une SECONDE instance `ctk.CTk()` créée dans le même
+        processus, à côté de cette fixture encore active, empêche
+        `winfo_exists()` de refléter correctement une destruction — vérifié
+        en isolant le problème. Un sous-processus dédié garantit qu'une
+        SEULE instance de l'application existe pendant tout le test,
+        exactement comme dans l'usage réel."""
+        import subprocess
+        import sys
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".py", delete=False, dir=RACINE) as f:
+            f.write(code_python)
+            chemin = f.name
+        try:
+            r = subprocess.run([sys.executable, chemin], capture_output=True,
+                              text=True, timeout=15, cwd=RACINE)
+            return r.returncode, r.stdout + r.stderr
+        finally:
+            os.remove(chemin)
+
+    def test_aucune_boucle_de_focus_force_dans_le_code(self):
+        """Garde-fou direct : la boucle incriminée ne doit plus jamais
+        réapparaître dans `_bloquer_demarrage`.
+
+        ⚠️ On utilise `ast` pour ne parcourir que les VRAIS appels de fonction
+        du code exécutable — pas une recherche textuelle de sous-chaîne, qui
+        s'était déclenchée à tort sur la docstring de la méthode : celle-ci
+        mentionne volontairement "focus_force()" en prose pour documenter
+        l'incident, et une simple exclusion des lignes commençant par un
+        guillemet ne suffit pas à exclure les lignes SUIVANTES d'une
+        docstring multi-lignes, qui ne commencent par aucun marqueur
+        évident."""
+        import ast
+
+        source = _lire("app.py")
+        arbre = ast.parse(source)
+        methode = None
+        for noeud in ast.walk(arbre):
+            if isinstance(noeud, ast.FunctionDef) and noeud.name == "_bloquer_demarrage":
+                methode = noeud
+                break
+        assert methode is not None, "_bloquer_demarrage introuvable"
+
+        appels_de_fonction = set()
+        for noeud in ast.walk(methode):
+            if isinstance(noeud, ast.Call) and isinstance(noeud.func, ast.Attribute):
+                appels_de_fonction.add(noeud.func.attr)
+
+        assert "focus_force" not in appels_de_fonction, (
+            "focus_force() est de retour dans le CODE de la fenêtre de "
+            "blocage — c'est précisément ce qui a rendu ALT+F4 inopérant "
+            "lors d'un incident réel")
+
+        # "-topmost" : recherché comme argument littéral d'un appel
+        # `.attributes(...)`, pas comme simple sous-chaîne du texte source.
+        for noeud in ast.walk(methode):
+            if (isinstance(noeud, ast.Call) and isinstance(noeud.func, ast.Attribute)
+                    and noeud.func.attr == "attributes"):
+                for arg in noeud.args:
+                    valeur = getattr(arg, "value", None)
+                    assert valeur != "-topmost", (
+                        "-topmost combiné à grab_set peut reproduire le "
+                        "même incident")
+
+    def test_la_fenetre_est_mise_au_premier_plan_une_seule_fois(self):
+        """Deux risques opposés, un seul équilibre :
+        • sans mise au premier plan, la fenêtre peut s'ouvrir DERRIÈRE la
+          fenêtre principale — l'appli paraît figée, sans message visible ;
+        • avec une BOUCLE qui reprend le focus, ALT+F4 devient inopérant
+          (incident réel).
+        Le helper commun `_focus_toplevel` fait les deux choses une seule
+        fois : c'est lui qui doit être employé."""
+        import ast
+        arbre = ast.parse(_lire("app.py"))
+        methode = next(n for n in ast.walk(arbre)
+                       if isinstance(n, ast.FunctionDef)
+                       and n.name == "_bloquer_demarrage")
+        appels = {n.func.id for n in ast.walk(methode)
+                  if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+        assert "_focus_toplevel" in appels, (
+            "la fenêtre de blocage n'est plus mise au premier plan : elle "
+            "peut s'ouvrir derrière la fenêtre principale")
+        # Aucune fonction imbriquée qui se re-planifie elle-même (la boucle
+        # de l'incident s'appelait `reprendre_le_focus`).
+        imbriquees = [n for n in ast.walk(methode)
+                      if isinstance(n, ast.FunctionDef) and n is not methode]
+        for f in imbriquees:
+            noms = {c.func.attr for c in ast.walk(f)
+                    if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)}
+            assert "after" not in noms, (
+                f"« {f.name} » se re-planifie avec after() : c'est la forme "
+                "exacte de la boucle qui a rendu ALT+F4 inopérant")
+
+    _PREAMBULE = ('''
+import sys, os, tempfile
+sys.path.insert(0, ''' + repr(RACINE) + ''')
+os.environ["HOME"] = tempfile.mkdtemp()
+import customtkinter as ctk
+ctk.set_appearance_mode("light")
+import app as module_app
+module_app.App._auto_connect = lambda s, *a, **k: None
+module_app.App._first_run_wizard = lambda s, *a, **k: None
+a = module_app.App()
+a.update()
+a._bloquer_demarrage({"version": "9.9.9", "url": "https://x.invalid",
+                      "notes": "Test.", "urgent": True, "obligatoire": True})
+a.update()
+win = [w for w in a.winfo_children() if isinstance(w, ctk.CTkToplevel)][0]
+''')
+
+    def test_le_bouton_quitter_existe_et_ferme_lapplication(self):
+        """Reproduit littéralement l'incident : clique sur 'Quitter' et
+        vérifie que l'application entière disparaît, pas seulement la modale.
+
+        Exécuté en SOUS-PROCESSUS (voir _executer_dans_sous_processus) :
+        garantit qu'une seule instance de l'application existe pendant le
+        test, comme dans l'usage réel."""
+        code = self._PREAMBULE + '''
+btn_quitter = None
+for w in win.winfo_children():
+    if isinstance(w, ctk.CTkButton) and w.cget("text") == "Quitter":
+        btn_quitter = w
+assert btn_quitter is not None, "bouton Quitter introuvable"
+btn_quitter.invoke()
+a.update()
+try:
+    existe = a.winfo_exists()
+except Exception:
+    existe = False
+print("RESULTAT:", not existe)
+assert not existe
+'''
+        code_retour, sortie = self._executer_dans_sous_processus(code)
+        assert code_retour == 0 and "RESULTAT: True" in sortie, (
+            f"le bouton 'Quitter' ne ferme pas l'application "
+            f"(code={code_retour}) :\n{sortie}")
+
+    def test_la_croix_de_la_modale_ferme_lapplication_entiere(self):
+        """⚠️ Le point EXACT de l'incident : la croix ne doit ni ne rien faire
+        (déroutant) ni être neutralisée au point qu'aucune fermeture système
+        ne fonctionne — elle doit fermer l'application, tout comme le ferait
+        une fermeture système normale."""
+        code = self._PREAMBULE + '''
+proto = win.protocol("WM_DELETE_WINDOW")
+assert proto, "aucun protocole de fermeture enregistré sur la croix"
+win.tk.call(proto)
+a.update()
+try:
+    existe = a.winfo_exists()
+except Exception:
+    existe = False
+print("RESULTAT:", not existe)
+assert not existe
+'''
+        code_retour, sortie = self._executer_dans_sous_processus(code)
+        assert code_retour == 0 and "RESULTAT: True" in sortie, (
+            f"la croix de la fenêtre de blocage ne ferme plus l'application : "
+            f"c'est exactement le défaut qui a forcé à tuer le processus "
+            f"depuis le gestionnaire de tâches lors d'un incident réel "
+            f"(code={code_retour}) :\n{sortie}")
+
+    def test_la_fenetre_principale_garde_son_protocole_de_fermeture_normal(self):
+        """La fenêtre PRINCIPALE (celle avec la barre latérale) ne doit
+        JAMAIS voir son propre WM_DELETE_WINDOW redéfini par le blocage :
+        seule la petite modale doit avoir un comportement particulier."""
+        code = ('''
+import sys, os, tempfile
+sys.path.insert(0, ''' + repr(RACINE) + ''')
+os.environ["HOME"] = tempfile.mkdtemp()
+import customtkinter as ctk
+ctk.set_appearance_mode("light")
+import app as module_app
+module_app.App._auto_connect = lambda s, *a, **k: None
+module_app.App._first_run_wizard = lambda s, *a, **k: None
+a = module_app.App()
+a.update()
+proto_avant = a.protocol("WM_DELETE_WINDOW")
+a._bloquer_demarrage({"version": "9.9.9", "url": "https://x.invalid",
+                      "notes": "Test.", "urgent": True, "obligatoire": True})
+a.update()
+proto_apres = a.protocol("WM_DELETE_WINDOW")
+print("RESULTAT:", proto_avant == proto_apres)
+assert proto_avant == proto_apres
+''')
+        code_retour, sortie = self._executer_dans_sous_processus(code)
+        assert code_retour == 0 and "RESULTAT: True" in sortie, (
+            f"le blocage a modifié le protocole de fermeture de la fenêtre "
+            f"PRINCIPALE (code={code_retour}) :\n{sortie}")
+
+
+class TestMessageDeBlocageNeutre:
+    """La fenêtre de mise à jour obligatoire ne donne JAMAIS la raison du
+    blocage : message fixe et neutre, quel que soit le contenu du champ
+    `notes` de version.json (réservé au bandeau ordinaire)."""
+
+    @staticmethod
+    def _textes(win):
+        import customtkinter as ctk
+        return [str(w.cget("text")) for w in win.winfo_children()
+                if isinstance(w, ctk.CTkLabel)]
+
+    def test_les_notes_ne_sont_pas_affichees(self, app):
+        import customtkinter as ctk
+
+        import app as module_app
+        notes = "RAISON CONFIDENTIELLE A NE PAS AFFICHER"
+        app._bloquer_demarrage({"version": "9.9.9", "url": "https://x.invalid",
+                               "notes": notes, "urgent": True,
+                               "obligatoire": True})
+        app.update()
+        win = [w for w in app.winfo_children()
+               if isinstance(w, ctk.CTkToplevel)
+               and w.title() == "Mise à jour requise"][-1]
+        textes = self._textes(win)
+        try:
+            assert not any(notes in t for t in textes), (
+                "le champ notes est affiché dans la fenêtre de blocage : la "
+                "raison du blocage ne doit jamais apparaître")
+            assert module_app.MESSAGE_BLOCAGE in textes, (
+                "le message neutre de blocage n'est pas affiché")
+        finally:
+            win.destroy()
+            app.update()
+
+    def test_le_message_neutre_ne_donne_aucune_raison(self):
+        import app as module_app
+        message = module_app.MESSAGE_BLOCAGE.lower()
+        for mot in ("mot de passe", "véhicule", "sécurité", "parce que", "car "):
+            assert mot not in message, (
+                f"le message de blocage contient « {mot} » : il ne doit "
+                "donner aucune raison")
+
+
 class TestBoutonDeTelechargementToujoursPresent:
     """⚠️ La fenêtre bloquante ne doit JAMAIS se retrouver sans aucun moyen
     d'agir. Un premier essai rendait le bouton conditionnel à `info["url"]` :
@@ -489,7 +747,8 @@ class TestBoutonDeTelechargementToujoursPresent:
                                "obligatoire": True})
         app.update()
         win = [w for w in app.winfo_children()
-               if isinstance(w, ctk.CTkToplevel)][0]
+               if isinstance(w, ctk.CTkToplevel)
+               and w.title() == "Mise à jour requise"][-1]
         assert self._bouton_present(win)
         self._nettoyer(win, app)
 
@@ -501,7 +760,8 @@ class TestBoutonDeTelechargementToujoursPresent:
                                "obligatoire": True})
         app.update()
         win = [w for w in app.winfo_children()
-               if isinstance(w, ctk.CTkToplevel)][0]
+               if isinstance(w, ctk.CTkToplevel)
+               and w.title() == "Mise à jour requise"][-1]
         assert self._bouton_present(win), (
             "fenêtre bloquante SANS bouton de téléchargement : blocage sans "
             "aucune issue possible")

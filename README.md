@@ -205,10 +205,13 @@ possibles selon la publication :
 - **Normale** (par défaut) : si une version plus récente existe, un bandeau
   apparaît en pied de barre latérale avec un bouton « Télécharger ». Ne
   retarde ni n'empêche jamais l'ouverture.
-- **Obligatoire** (`obligatoire: true` dans `version.json`, réservé aux cas où
-  continuer serait dangereux — ex. rotation du mot de passe du compte
-  véhicule) : une fenêtre modale, sans croix ni bouton d'annulation, empêche
-  le démarrage tant que la personne n'a pas mis à jour.
+- **Obligatoire** (`obligatoire: true` dans `version.json`) : une fenêtre
+  modale empêche d'utiliser l'application tant que la personne n'a pas mis à
+  jour. Message fixe et neutre, sans raison (`MESSAGE_BLOCAGE` dans
+  `app.py`) ; deux seules issues : télécharger la mise à jour ou quitter —
+  la croix et Alt+F4 quittent aussi. ⚠️ Jamais de boucle qui reprend le
+  focus : lors d'un test réel, elle avait rendu Alt+F4 inopérant et obligé à
+  tuer le processus.
 
   ⚠️ **Ce blocage, une fois confirmé par le serveur, est mémorisé localement**
   (voir `config.enregistrer_blocage_confirme` / `blocage_local_actif`) : il
