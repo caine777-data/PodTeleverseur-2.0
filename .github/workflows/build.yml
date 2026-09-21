@@ -263,12 +263,32 @@ jobs:
           NOTES="${{ inputs.notes }}"
           [ -z "$NOTES" ] && NOTES="Nouvelle version disponible."
 
+          # ⚠️ CORRECTIF : ces deux champs du formulaire (workflow_dispatch,
+          # voir plus haut) n'étaient JUSQU'ICI jamais transmis au fichier
+          # final — "obligatoire" n'était même pas écrit, et
+          # "version_minimale" restait figé à "" quel que soit le formulaire.
+          # Un utilisateur cochant "obligatoire" publiait donc, sans le
+          # savoir, une mise à jour parfaitement NORMALE : aucun blocage ne
+          # pouvait jamais se produire.
+          OBLIGATOIRE="${{ inputs.obligatoire }}"
+          [ -z "$OBLIGATOIRE" ] && OBLIGATOIRE="false"
+
+          MINIMALE="${{ inputs.version_minimale }}"
+          # Règle documentée dans MISE_EN_PLACE_MISES_A_JOUR.md : si
+          # "obligatoire" est coché et qu'aucun seuil n'est précisé, la
+          # version publiée elle-même sert de seuil — TOUT poste non encore
+          # sur cette version est alors bloqué.
+          if [ "$OBLIGATOIRE" = "true" ] && [ -z "$MINIMALE" ]; then
+            MINIMALE="$VERSION"
+          fi
+
           cat > version.json <<EOF
           {
             "version": "$VERSION",
             "url": "https://github.com/$DEPOT/releases/latest",
             "notes": "$NOTES",
-            "version_minimale": ""
+            "version_minimale": "$MINIMALE",
+            "obligatoire": $OBLIGATOIRE
           }
           EOF
           echo "Contenu publié :" && cat version.json

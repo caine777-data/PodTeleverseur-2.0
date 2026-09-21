@@ -127,5 +127,5 @@ c'est normal. Pour tester, il faut une version plus ancienne sous la main.
 | Échec « 403 » | jeton sans droit *Contents : Read and write* sur le dépôt public |
 | Échec au clonage | dépôt public créé sans README |
 | Bandeau jamais affiché | version installée ≥ version publiée ; voir le Journal |
-| Blocage jamais affiché malgré `obligatoire` coché | `version_minimale` non franchie par la version installée testée, ou champ laissé sur une valeur déjà dépassée |
+| Blocage jamais affiché malgré `obligatoire` coché | (1) `version_minimale` non franchie par la version installée testée ; (2) la version testée n'était pas ANTÉRIEURE à la version publiée — une version égale ou supérieure ne se bloque jamais elle-même ; (3) régression corrigée en 2.3.0 : le formulaire n'était pas transmis au fichier `version.json` généré — vérifier que le fichier publié contient bien `"obligatoire": true` |
 | Une personne reste bloquée alors qu'une correction vient d'être publiée en NON obligatoire | normal : le verrou local persiste tant que la version installée n'a pas réellement changé — seule une vraie mise à jour le lève |

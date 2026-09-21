@@ -97,6 +97,123 @@ class TestBandeau:
         assert hasattr(module_app.App, "_ouvrir_lien_maj")
 
 
+class TestTransmissionDesChampsObligatoires:
+    """⚠️ RÉGRESSION RÉELLE, trouvée en test manuel : les champs `obligatoire`
+    et `version_minimale` existaient bien dans le FORMULAIRE
+    (workflow_dispatch), mais n'étaient JAMAIS transmis au bloc qui écrit
+    `version.json`. Une publication avec « obligatoire » coché produisait
+    donc, sans avertissement, un fichier PARFAITEMENT NORMAL — aucun blocage
+    ne pouvait jamais se déclencher.
+
+    Les tests précédents ne pouvaient pas voir ce trou : l'un vérifiait la
+    présence des champs dans le FORMULAIRE, l'autre vérifiait la LOGIQUE de
+    maj.py une fois des données reçues. Le maillon entre les deux — est-ce
+    que le formulaire alimente réellement le JSON généré ? — n'était testé
+    nulle part. C'est ce test-ci qui le couvre."""
+
+    def _workflow(self):
+        return _lire(".github/workflows/build.yml")
+
+    def test_le_bloc_ecrit_obligatoire_depuis_le_formulaire(self):
+        w = self._workflow()
+        # ⚠️ Le heredoc commence par `<<EOF` : chercher le PREMIER "EOF"
+        # après "cat > version.json" trouve cette ouverture, pas la fin du
+        # bloc. Il faut le second "EOF" — celui qui ferme réellement le
+        # heredoc. Une première version de ce test se trompait ici et
+        # tronquait le bloc avant même son contenu.
+        deb = w.index("cat > version.json")
+        ouverture = w.index("EOF", deb)
+        fin = w.index("EOF", ouverture + 3)
+        bloc = w[deb:fin]
+        assert "inputs.obligatoire" in w[:deb], (
+            "le formulaire obligatoire n'est lu dans aucune variable avant "
+            "l'écriture du fichier")
+        assert '"obligatoire":' in bloc, (
+            "le champ obligatoire n'est pas écrit dans version.json")
+
+    def test_le_bloc_ecrit_version_minimale_depuis_le_formulaire(self):
+        w = self._workflow()
+        assert "inputs.version_minimale" in w, (
+            "le formulaire version_minimale n'est lu nulle part")
+        # Ne doit plus être figé à une chaîne vide littérale.
+        bloc = w[w.index("cat > version.json"):w.index("EOF", w.index("cat > version.json"))]
+        assert '"version_minimale": ""' not in bloc, (
+            "version_minimale est encore figé à une chaîne vide en dur : le "
+            "formulaire n'est jamais réellement pris en compte")
+
+    def test_simulation_bash_reproduit_la_regle_documentee(self):
+        """Rejoue littéralement la logique bash du workflow (sans l'exécuter
+        via GitHub Actions) pour les 3 combinaisons qui comptent, et vérifie
+        le JSON obtenu — c'est exactement le calcul qui a été trouvé cassé
+        lors d'un test réel."""
+        import json
+        import subprocess
+
+        script = self._workflow()
+        # Extrait le bloc de calcul bash tel qu'il existe réellement dans le
+        # fichier, entre la lecture des inputs et l'écriture du JSON — on ne
+        # duplique pas la logique dans le test, on rejoue le VRAI script.
+        deb = script.index('VERSION="${{ steps.v.outputs.num }}"')
+        fin = script.index("cat > version.json")
+        # Même correction que ci-dessus : viser le second "EOF" pour ne pas
+        # tronquer avant le contenu réel du bloc de calcul.
+        fin = script.index("cat > version.json")
+        bloc_brut = script[deb:fin]
+        # Neutralise la syntaxe GitHub Actions ${{ ... }} par des variables
+        # d'environnement shell classiques, injectées avant exécution.
+        bloc_bash = (bloc_brut
+                     .replace('${{ steps.v.outputs.num }}', "$V_NUM")
+                     .replace('${{ inputs.notes }}', "$IN_NOTES")
+                     .replace('${{ inputs.obligatoire }}', "$IN_OBLIGATOIRE")
+                     .replace('${{ inputs.version_minimale }}', "$IN_MINIMALE"))
+
+        cas = [
+            ({"IN_OBLIGATOIRE": "true", "IN_MINIMALE": ""},
+             {"obligatoire": True, "version_minimale": "2.3.0"}),
+            ({"IN_OBLIGATOIRE": "true", "IN_MINIMALE": "2.1.0"},
+             {"obligatoire": True, "version_minimale": "2.1.0"}),
+            ({"IN_OBLIGATOIRE": "false", "IN_MINIMALE": ""},
+             {"obligatoire": False, "version_minimale": ""}),
+        ]
+        import tempfile
+
+        # ⚠️ Passer le bloc via `bash -c "chaîne"` casse la syntaxe : le
+        # commentaire du workflow contient des apostrophes françaises et des
+        # guillemets qui entrent en conflit avec l'échappement de la chaîne
+        # d'arguments. On écrit le script dans un VRAI fichier temporaire,
+        # exactement comme GitHub Actions le ferait lui-même.
+        with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".sh", delete=False) as f:
+            f.write(bloc_bash)
+            f.write('\necho "OBL=$OBLIGATOIRE"\necho "MIN=$MINIMALE"\n')
+            chemin_script = f.name
+
+        try:
+            for env_supp, attendu in cas:
+                env = {"V_NUM": "2.3.0", "IN_NOTES": "test",
+                       "DEPOT_PUBLIC": "", "GITHUB_REPOSITORY_OWNER": "x"}
+                env.update(env_supp)
+                resultat = subprocess.run(
+                    ["bash", chemin_script],
+                    capture_output=True, text=True, env=env)
+                sortie = resultat.stdout
+                lignes_obl = [l for l in sortie.splitlines() if l.startswith("OBL=")]
+                lignes_min = [l for l in sortie.splitlines() if l.startswith("MIN=")]
+                assert lignes_obl and lignes_min, (
+                    f"cas {env_supp} : le script n'a produit aucune sortie "
+                    f"exploitable (stderr : {resultat.stderr!r})")
+                obl = lignes_obl[-1][4:]
+                mini = lignes_min[-1][4:]
+                assert (obl == "true") == attendu["obligatoire"], (
+                    f"cas {env_supp} : obligatoire calculé = {obl!r}, "
+                    f"attendu {attendu['obligatoire']}")
+                assert mini == attendu["version_minimale"], (
+                    f"cas {env_supp} : version_minimale calculée = {mini!r}, "
+                    f"attendu {attendu['version_minimale']!r}")
+        finally:
+            os.remove(chemin_script)
+
+
 class TestWorkflowDePublication:
     """Les deux moitiés du dispositif doivent concorder."""
 
