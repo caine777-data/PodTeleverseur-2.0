@@ -50,29 +50,73 @@ variables** → **Actions** → **New repository secret** :
 - Name : `RELEASES_TOKEN`
 - Secret : le jeton copié à l'étape 2
 
-## Étape 4 — Première publication
+## Étape 4 — Publication normale (bandeau, non bloquant)
 
 Onglet **Actions** → **Run workflow** :
 
 - **version** : écrire `OUI` — ⚠️ champ VIDE = compilation d'essai, rien n'est
   publié. C'est le piège le plus fréquent.
 - **notes** : la phrase affichée dans le bandeau (facultatif)
+- **obligatoire** : laisser **décoché**
+- **version_minimale** : laisser **vide**
 
 Le numéro est lu dans `__version__.py` : ce qui est saisi dans le formulaire ne
 sert qu'à déclencher la publication.
 
+## Étape 4 bis — Publication OBLIGATOIRE (fenêtre bloquante)
+
+⚠️ **À réserver aux cas où continuer à utiliser une ancienne version serait
+dangereux** (ex. rotation du mot de passe du compte véhicule, qui rend les
+anciennes versions incapables de téléverser les gros fichiers). Ce n'est PAS
+un outil de licence ou de contrôle d'accès général — un mauvais usage
+transformerait un incident réseau banal en blocage ressenti comme arbitraire.
+
+Onglet **Actions** → **Run workflow** :
+
+- **version** : `OUI`
+- **notes** : message clair expliquant POURQUOI la mise à jour est requise —
+  c'est ce texte que la personne bloquée verra, sans autre contexte
+- **obligatoire** : **cocher**
+- **version_minimale** :
+  - laisser **vide** → TOUT poste non encore sur cette version sera bloqué
+    (le seuil devient la version publiée elle-même) ;
+  - ou préciser une version antérieure précise (ex. `2.5.0`) si seules les
+    versions plus anciennes que celle-ci doivent être bloquées, les autres
+    recevant un bandeau normal.
+
+### Comportement côté poste enseignant
+
+1. **Poste connecté au moment du lancement** : le serveur confirme le
+   blocage → fenêtre modale immédiate, sans croix ni bouton d'annulation,
+   avec le lien de téléchargement. Ce blocage est alors **mémorisé
+   localement** sur ce poste.
+2. **Poste relancé plus tard, même SANS réseau** : le blocage **reste actif**
+   — c'est volontaire, pour empêcher qu'une personne déjà notifiée contourne
+   le blocage en coupant sa connexion. Le blocage ne se lève que par une
+   mise à jour réelle vers une version qui n'est plus concernée.
+3. **Poste jamais encore connecté au moment d'un blocage** : tant que le
+   serveur n'a jamais pu répondre, ce poste démarre normalement — un réseau
+   absent ne peut jamais DÉCLENCHER un nouveau blocage, seulement le
+   maintenir une fois qu'il a été confirmé.
+
 ## Étape 5 — Vérifier
 
-1. Le dépôt public contient un `version.json` à la bonne version, et une Release
-   avec quatre fichiers.
+1. Le dépôt public contient un `version.json` à la bonne version, et une
+   Release avec **deux fichiers** (un installeur Windows, un `.dmg` macOS —
+   plus de version portable depuis la 2.2.x).
 2. Ouvrir dans un navigateur :
    `https://raw.githubusercontent.com/caine777-data/podteleverseur-releases/main/version.json`
-3. Lancer une version **antérieure** du Téléverseur : le bandeau doit apparaître
-   dans les deux secondes. Onglet Journal : une ligne « Mise à jour — … »
-   confirme que la vérification a eu lieu.
+   et vérifier que `obligatoire` et `version_minimale` correspondent à ce qui
+   a été saisi dans le formulaire.
+3. Lancer une version **antérieure** du Téléverseur :
+   - publication normale → le bandeau doit apparaître dans les deux
+     secondes ; Onglet Journal : une ligne « Mise à jour — … » confirme que
+     la vérification a eu lieu ;
+   - publication obligatoire → une fenêtre bloquante doit apparaître
+     immédiatement, sans possibilité de la fermer par la croix.
 
-⚠️ Une version **égale ou plus récente** n'affiche aucun bandeau : c'est
-normal. Pour tester, il faut une version plus ancienne sous la main.
+⚠️ Une version **égale ou plus récente** n'affiche ni bandeau ni blocage :
+c'est normal. Pour tester, il faut une version plus ancienne sous la main.
 
 ## En cas de problème
 
@@ -83,3 +127,5 @@ normal. Pour tester, il faut une version plus ancienne sous la main.
 | Échec « 403 » | jeton sans droit *Contents : Read and write* sur le dépôt public |
 | Échec au clonage | dépôt public créé sans README |
 | Bandeau jamais affiché | version installée ≥ version publiée ; voir le Journal |
+| Blocage jamais affiché malgré `obligatoire` coché | `version_minimale` non franchie par la version installée testée, ou champ laissé sur une valeur déjà dépassée |
+| Une personne reste bloquée alors qu'une correction vient d'être publiée en NON obligatoire | normal : le verrou local persiste tant que la version installée n'a pas réellement changé — seule une vraie mise à jour le lève |

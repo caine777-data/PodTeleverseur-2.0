@@ -168,7 +168,32 @@ class App(_AppBase):
         self._build_ui()
         self._show_tab("upload")
 
-        # Démarrage :
+        # ⚠️ CONTRÔLE LOCAL DU BLOCAGE, EN TOUT PREMIER — avant même de
+        # décider de lancer l'auto-connexion ou l'assistant de premier
+        # lancement. Si un blocage a déjà été confirmé par le serveur lors
+        # d'un lancement précédent pour CETTE version, il doit s'appliquer
+        # immédiatement, SANS ATTENDRE le réseau : c'est tout le sens du
+        # verrou local (voir config.blocage_local_actif). Si on laissait
+        # l'auto-connexion ou l'assistant démarrer avant, la personne
+        # pourrait déjà interagir avec l'application pendant la fraction de
+        # seconde qui précède l'affichage de la fenêtre bloquante.
+        blocage_local = cfg.blocage_local_actif(APP_VERSION)
+        if blocage_local:
+            self._bloquer_demarrage({
+                "version": blocage_local["version"],
+                "url": blocage_local["url"],
+                "notes": blocage_local["notes"],
+                "urgent": True,
+                "obligatoire": True,
+            })
+            # Le blocage local ne dispense PAS de revérifier le réseau : si
+            # une version plus récente a entre-temps été publiée, autant le
+            # savoir et lever le verrou dès que possible (voir _verifier_maj,
+            # qui appelle cfg.lever_blocage_local() en cas de mise à jour).
+            self.after(2000, self._verifier_maj)
+            return
+
+        # Démarrage normal :
         #   • token déjà enregistré → reconnexion automatique silencieuse ;
         #   • aucun token (= première utilisation sur ce poste) → on ouvre
         #     l'assistant guidé qui prend l'enseignant par la main.
@@ -1627,23 +1652,153 @@ class App(_AppBase):
                 de bandeau, sans pouvoir en connaître la raison."""
                 self._ui(self._log, f"ℹ Mise à jour — {message}")
 
+            # Un SEUL appel réseau, réutilisé pour les deux besoins : comparer
+            # les versions, et distinguer "vérification impossible" de "à jour
+            # confirmé" (voir plus bas) — sans quoi il aurait fallu interroger
+            # le serveur deux fois à chaque démarrage.
+            try:
+                donnees = maj.recuperer_info(
+                    getattr(cfg, "UPDATE_URL", ""),
+                    getattr(cfg, "UPDATE_TIMEOUT_S", 5),
+                    journal=tracer)
+            except Exception as e:
+                donnees = None
+                self._ui(self._log, f"ℹ Mise à jour — vérification interrompue : {e}")
+
             try:
                 info = maj.etat_mise_a_jour(
                     APP_VERSION,
                     getattr(cfg, "UPDATE_URL", ""),
                     getattr(cfg, "UPDATE_TIMEOUT_S", 5),
-                    journal=tracer)
+                    journal=tracer, infos=donnees)
             except Exception as e:
                 info = None              # jamais bloquant
                 self._ui(self._log, f"ℹ Mise à jour — vérification interrompue : {e}")
-            if info:
+
+            if info and info.get("obligatoire"):
+                # Blocage : PAS de bandeau, une fenêtre modale à la place.
+                # Réservé aux cas où continuer serait dangereux — voir maj.py.
+                #
+                # ⚠️ On MÉMORISE ce blocage localement (voir config.py) : le
+                # serveur vient de répondre, en direct, que cette version est
+                # bloquée. Ce fait doit désormais tenir MÊME SANS RÉSEAU, pour
+                # empêcher qu'une personne notifiée une fois contourne le
+                # blocage en coupant simplement sa connexion ensuite.
+                cfg.enregistrer_blocage_confirme(
+                    APP_VERSION, info.get("version", ""),
+                    info.get("url", ""), info.get("notes", ""))
+                self._ui(self._bloquer_demarrage, info)
+            elif info:
                 self._ui(self._afficher_bandeau_maj, info)
             else:
-                # Cas normal le plus fréquent : on est à jour. On le note
-                # discrètement pour confirmer que la vérification a bien eu lieu.
-                self._ui(self._log,
-                         f"ℹ Mise à jour — version {APP_VERSION} : aucune plus récente.")
+                # `info` est None ici pour DEUX raisons possibles : vérification
+                # impossible (réseau coupé, `donnees` est None) OU version
+                # confirmée à jour (`donnees` contient une réponse valide). On
+                # ne lève le verrou local QUE dans le second cas : lever un
+                # verrou parce que le réseau était simplement absent romprait
+                # tout le principe du blocage local.
+                if donnees and donnees.get("version"):
+                    cfg.lever_blocage_local()
+                    self._ui(self._log,
+                             f"ℹ Mise à jour — version {APP_VERSION} : aucune "
+                             f"plus récente.")
+                else:
+                    self._ui(self._log,
+                             "ℹ Mise à jour — vérification impossible "
+                             "(réseau indisponible) ; le verrou local, s'il "
+                             "existe, n'est pas modifié.")
         self._run(travail)
+
+    def _bloquer_demarrage(self, info: dict):
+        """Fenêtre modale, SANS échappatoire, en cas de mise à jour obligatoire.
+
+        ⚠️ Différence fondamentale avec `_afficher_bandeau_maj` : ici on ne
+        propose pas, on empêche. Réservé aux cas où continuer présenterait un
+        vrai risque technique (ex. le mot de passe du compte véhicule a changé
+        et un dépôt échouerait en abîmant des fichiers à moitié envoyés) —
+        jamais un usage de contrôle d'accès ou de licence : ce n'est ni prévu
+        ni fiable pour ça (l'utilisateur garde la main sur son poste et sur le
+        fichier `config.json`).
+
+        La fenêtre n'a NI croix fonctionnelle NI bouton d'annulation : la
+        croix est redirigée vers une fonction qui ne fait rien
+        (`WM_DELETE_WINDOW`), et aucun autre chemin de fermeture n'existe
+        avant que le lien de téléchargement soit ouvert. Elle est construite
+        directement ici plutôt qu'avec `_focus_toplevel` : cette dernière
+        laisse la fenêtre parent accessible dès que le focus quitte la
+        modale (Alt+Tab, clic sur une autre fenêtre), ce qui suffirait à
+        contourner un simple bandeau mais pas ce blocage."""
+        try:
+            win = ctk.CTkToplevel(self)
+            win.title("Mise à jour requise")
+            win.geometry("440x260")
+            win.resizable(False, False)
+            win.transient(self)
+
+            def ignorer():
+                pass                      # la croix ne fait RIEN
+            win.protocol("WM_DELETE_WINDOW", ignorer)
+
+            ctk.CTkLabel(win, text="⚠️  Mise à jour requise",
+                         font=ctk.CTkFont(size=17, weight="bold"),
+                         text_color=T_ERREUR).pack(pady=(24, 8))
+            texte = (info.get("notes") or "").strip() or (
+                "Cette version de Pod Téléverseur ne peut plus être utilisée "
+                "en l'état.")
+            ctk.CTkLabel(win, text=texte, wraplength=380, justify="center",
+                         font=ctk.CTkFont(size=13)).pack(padx=24, pady=(0, 6))
+            ctk.CTkLabel(
+                win,
+                text=f"Version installée : {APP_VERSION}\n"
+                     f"Version requise : {info.get('version', '?')}",
+                text_color=T_SECONDAIRE, justify="center",
+                font=ctk.CTkFont(size=11)).pack(pady=(0, 16))
+
+            # ⚠️ Le bouton est TOUJOURS présent, jamais conditionnel à
+            # `info.get("url")`. Dans le circuit normal, le workflow renseigne
+            # toujours l'URL — mais un `version.json` corrompu, modifié à la
+            # main, ou un ancien verrou local sans URL enregistrée ne doivent
+            # JAMAIS produire une fenêtre bloquante sans la moindre issue :
+            # ce serait un blocage total, sans moyen d'agir. On retombe alors
+            # sur la page générique des Releases (config.UPDATE_FALLBACK_URL).
+            lien = info.get("url") or getattr(
+                cfg, "UPDATE_FALLBACK_URL",
+                "https://github.com/caine777-data/podteleverseur-releases/releases/latest")
+            ctk.CTkButton(
+                win, text="Télécharger la mise à jour", height=36,
+                fg_color=C_ACTION, hover_color=C_ACTION_SURV,
+                font=ctk.CTkFont(size=13, weight="bold"),
+                command=lambda u=lien: self._ouvrir_lien_maj(u)
+                ).pack(fill="x", padx=32, pady=(0, 8))
+
+            # Focus forcé et repété : Alt+Tab ou un clic ailleurs ne doit pas
+            # rendre la fenêtre principale utilisable. `grab_set` capture les
+            # évènements clavier/souris pour l'application entière, mais un
+            # gestionnaire de fenêtres peut malgré tout faire passer le focus
+            # système ailleurs — d'où la reprise périodique ci-dessous.
+            win.lift()
+            win.attributes("-topmost", True)
+            win.after(150, win.focus_force)
+            win.after(200, win.grab_set)
+
+            def reprendre_le_focus():
+                try:
+                    if win.winfo_exists():
+                        win.lift()
+                        win.focus_force()
+                        win.after(400, reprendre_le_focus)
+                except Exception:
+                    pass
+            win.after(400, reprendre_le_focus)
+
+            self._log(f"⚠️ Mise à jour obligatoire : version {APP_VERSION} "
+                      f"bloquée (minimum requis : {info.get('version', '?')}).")
+        except Exception as e:
+            # Un échec de CONSTRUCTION de la fenêtre ne doit jamais planter
+            # l'application ni, à l'inverse, la laisser silencieusement
+            # utilisable sans que personne ne le sache : on trace fort.
+            self._log(f"❌ Impossible d'afficher le blocage de mise à jour "
+                      f"obligatoire : {e}")
 
     def _afficher_bandeau_maj(self, info: dict):
         """Affiche le bandeau annonçant une nouvelle version.

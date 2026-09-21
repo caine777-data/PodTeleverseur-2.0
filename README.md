@@ -198,13 +198,35 @@ python -m pytest tests/ -q
 
 ## Mises à jour
 
-L'application consulte au démarrage — en arrière-plan, sans jamais retarder
-l'ouverture — le fichier `version.json` du dépôt public
-`podteleverseur-releases`. Si une version plus récente existe, un bandeau
-apparaît en pied de barre latérale avec un bouton « Télécharger ».
+L'application consulte au démarrage — en arrière-plan — le fichier
+`version.json` du dépôt public `podteleverseur-releases`. Deux réactions
+possibles selon la publication :
 
-La mise en place (dépôt public, jeton, secret) est décrite dans
-**`MISE_EN_PLACE_MISES_A_JOUR.md`**.
+- **Normale** (par défaut) : si une version plus récente existe, un bandeau
+  apparaît en pied de barre latérale avec un bouton « Télécharger ». Ne
+  retarde ni n'empêche jamais l'ouverture.
+- **Obligatoire** (`obligatoire: true` dans `version.json`, réservé aux cas où
+  continuer serait dangereux — ex. rotation du mot de passe du compte
+  véhicule) : une fenêtre modale, sans croix ni bouton d'annulation, empêche
+  le démarrage tant que la personne n'a pas mis à jour.
+
+  ⚠️ **Ce blocage, une fois confirmé par le serveur, est mémorisé localement**
+  (voir `config.enregistrer_blocage_confirme` / `blocage_local_actif`) : il
+  reste actif aux lancements suivants MÊME SANS RÉSEAU, pour empêcher qu'une
+  personne notifiée une fois contourne le blocage en coupant sa connexion.
+  Un réseau absent ne peut en revanche jamais DÉCLENCHER un nouveau blocage —
+  seulement le maintenir une fois qu'il a été confirmé au moins une fois. Le
+  verrou se lève automatiquement dès qu'une version qui n'est plus concernée
+  est installée.
+
+  ⚠️ Le bouton « Télécharger la mise à jour » de cette fenêtre est **toujours
+  présent**, jamais conditionnel à la présence d'une URL dans `version.json` :
+  si elle venait à manquer (fichier corrompu, modifié à la main), le bouton
+  retombe sur la page générique des Releases (`config.UPDATE_FALLBACK_URL`).
+  Un blocage sans la moindre issue n'est jamais acceptable.
+
+La mise en place (dépôt public, jeton, secret) et la procédure de publication
+obligatoire sont décrites dans **`MISE_EN_PLACE_MISES_A_JOUR.md`**.
 
 ⚠️ **La version n'est définie qu'à UN endroit : `__version__.py`.** Elle était
 auparavant écrite dans l'en-tête de chaque fichier ; en 2.1.0, elle a été
