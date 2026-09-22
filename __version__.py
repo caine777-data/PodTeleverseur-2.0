@@ -18,7 +18,7 @@ jour lors d'une publication : il ne peut pas importer de code Python. Un test
 vérifie qu'il concorde.
 """
 
-__version__ = "2.3.1"
+__version__ = "2.3.2"
 
 # Décomposition (entiers), pour les métadonnées Windows :
 # (majeur, mineur, correctif, build).
