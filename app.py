@@ -9,7 +9,7 @@ l'Université de Toulouse. Version légère destinée aux enseignants :
     additionnels communs, lancement d'encodage automatique après l'envoi).
   • Mes vidéos : gestion des vidéos du propriétaire sélectionné (renommer,
     statut, type, co-propriétaires, sous-titres, remplacer le fichier &
-    ré-encoder, supprimer). N'affiche que les vidéos de ce compte.
+    ré-encoder). N'affiche que les vidéos de ce compte.
   • Configuration (connexion à l'instance + identifiant du compte déposant).
   • Journal des opérations.
 Dérivée de PodAdmin : les modules d'administration (groupes, réaffectation,
@@ -1578,7 +1578,7 @@ class App(_AppBase):
     #     • liste filtrable (texte, statut, encodage, chaîne, type) ;
     #     • panneau détail/actions : renommer, statut (Brouillon/Public/
     #       Restreint), type, co-propriétaires, sous-titres, REMPLACER le
-    #       fichier & ré-encoder, supprimer ;
+    #       fichier & ré-encoder ;
     #     • sélection multiple : statut, type, disciplines, chaînes et
     #       thèmes, suppression, sur les vidéos sélectionnées.
     #
@@ -2195,8 +2195,6 @@ class App(_AppBase):
     def _myvids_render_lot(self):
         """Panneau des actions sur la sélection multiple."""
         vids = self._myvids_lot()
-        ids = self._myvids_owner_ids()
-        n_co = sum(1 for x in vids if self._role_sur_video(x, ids) == "coproprietaire")
         d = self.myvids_detail
         ctk.CTkLabel(d, text=f"{len(vids)} vidéos sélectionnées",
                      font=ctk.CTkFont(size=15, weight="bold")).pack(anchor="w", padx=4, pady=(4, 0))
@@ -2236,20 +2234,7 @@ class App(_AppBase):
                       hover_color=C_NEUTRE_SURV, text_color=T_SUR_NEUTRE,
                       command=self._myvids_lot_chaines).pack(anchor="w", padx=4)
 
-        ctk.CTkLabel(d, text="Zone sensible", anchor="w",
-                     font=ctk.CTkFont(size=12, weight="bold"),
-                     text_color=T_ERREUR).pack(anchor="w", padx=4, pady=(14, 2))
-        possedees = len(vids) - n_co
-        if possedees:
-            ctk.CTkButton(d, text=f"🗑  Supprimer {possedees} vidéo(s)",
-                          fg_color=C_DESTRUCTIF, hover_color=C_DESTR_SURV,
-                          command=self._myvids_lot_supprimer).pack(anchor="w", padx=4)
-        if n_co:
-            ctk.CTkLabel(d, text=f"👥  {n_co} vidéo(s) en co-propriété : elles ne peuvent "
-                                 "pas être supprimées et seront ignorées par la "
-                                 "suppression.",
-                         text_color=T_SECONDAIRE, font=ctk.CTkFont(size=11),
-                         wraplength=400, justify="left").pack(anchor="w", padx=4, pady=(4, 0))
+        # Pas de suppression en lot non plus (voir `_myvids_render_detail`).
 
         ctk.CTkButton(d, text="Désélectionner tout", fg_color=C_NEUTRE,
                       hover_color=C_NEUTRE_SURV, text_color=T_SUR_NEUTRE,
@@ -2347,34 +2332,6 @@ class App(_AppBase):
             title=f"Chaînes et thèmes pour {len(vids)} vidéo(s)",
             consigne="Cochez les chaînes et, si besoin, les thèmes à appliquer aux "
                      "vidéos sélectionnées. Cocher un thème coche sa chaîne.")
-
-    def _myvids_lot_supprimer(self):
-        """Suppression en lot : les vidéos en CO-PROPRIÉTÉ sont ignorées (Pod
-        la refuse à un co-propriétaire). Double confirmation."""
-        ids = self._myvids_owner_ids()
-        vids = [x for x in self._myvids_lot()
-                if self._role_sur_video(x, ids) == "proprietaire"]
-        if not vids:
-            self._myvids_set_msg("Aucune vidéo supprimable dans la sélection.", T_ALERTE)
-            return
-        if not messagebox.askyesno(
-                "⚠️  Supprimer des vidéos",
-                f"Supprimer DÉFINITIVEMENT {len(vids)} vidéo(s) ?\n\n"
-                "Il n'y a pas de corbeille sur Pod."):
-            return
-        if not messagebox.askyesno("Confirmation",
-                                   f"Dernière confirmation : {len(vids)} vidéo(s) "
-                                   "seront effacées. Continuer ?"):
-            return
-
-        def apres(v):
-            if v in self.myvids_videos:
-                self.myvids_videos.remove(v)
-            if v.get("slug") in self.myvids_multi:
-                self.myvids_multi.remove(v.get("slug"))
-
-        self._myvids_lancer_lot(vids, lambda v: self.api.delete_video(v), apres,
-                                "suppression")
 
     def _myvids_lancer_lot(self, vids, action, apres, libelle):
         self._myvids_set_msg(f"⏳  {libelle} : {len(vids)} vidéo(s) en cours…", T_SECONDAIRE)
@@ -2600,25 +2557,11 @@ class App(_AppBase):
                       command=lambda: self._myvids_replace_source(v)).pack(
             anchor="w", padx=4, pady=(4, 0))
 
-        # — Suppression (zone sensible) —
-        ctk.CTkLabel(self.myvids_detail, text="Zone sensible", anchor="w",
-                     font=ctk.CTkFont(size=12, weight="bold"),
-                     text_color=T_ERREUR).pack(anchor="w", padx=4, pady=(14, 2))
-        if self._role_sur_video(v, self._myvids_owner_ids()) == "coproprietaire":
-            # Pod refuse la suppression à un co-propriétaire : on l'explique
-            # au lieu de proposer un bouton qui échouerait.
-            ctk.CTkLabel(self.myvids_detail,
-                         text="👥  Vous êtes co-propriétaire de cette vidéo : vous "
-                              "pouvez la modifier, mais seul son propriétaire peut "
-                              "la supprimer.",
-                         text_color=T_SECONDAIRE, font=ctk.CTkFont(size=11),
-                         wraplength=360, justify="left", anchor="w").pack(
-                anchor="w", padx=4, pady=(0, 8))
-        else:
-            ctk.CTkButton(self.myvids_detail, text="🗑  Supprimer cette vidéo",
-                          fg_color=C_DESTRUCTIF, hover_color=C_DESTR_SURV,
-                          command=lambda: self._myvids_delete(v)).pack(
-                anchor="w", padx=4, pady=(0, 8))
+        # Pas de suppression dans le Téléverseur (décision du 28/09/2026) :
+        # ni bouton ici, ni en sélection multiple, ni méthode dans PodAPI.
+        # Une suppression est définitive (aucune corbeille sur Pod) ; les
+        # gestes utiles restent : Brouillon pour rendre la vidéo invisible,
+        # « Remplacer & ré-encoder » pour la corriger sans changer son lien.
 
         # Zone de message du panneau
         self.myvids_msg = ctk.CTkLabel(self.myvids_detail, text="", text_color=T_SECONDAIRE,
@@ -2992,40 +2935,6 @@ class App(_AppBase):
             # modale restée bloquée rendrait l'application inutilisable.
             if modal:
                 self._ui(modal.ensure_unlocked)
-
-    # ── Suppression ────────────────────────────────────────────────────────
-
-    def _myvids_delete(self, v):
-        """Supprime la vidéo après DOUBLE confirmation (irréversible)."""
-        # Défense en profondeur : le bouton est masqué pour un co-propriétaire,
-        # mais on refuse aussi ici — Pod renverrait de toute façon une erreur.
-        if self._role_sur_video(v, self._myvids_owner_ids()) == "coproprietaire":
-            self._myvids_set_msg("Seul le propriétaire peut supprimer cette vidéo.", T_ALERTE)
-            return
-        if not messagebox.askyesno(
-                "⚠️  Supprimer la vidéo",
-                f"Supprimer DÉFINITIVEMENT « {v.get('title')} » ?\n\n"
-                "Cette action est IRRÉVERSIBLE (pas de corbeille sur Pod)."):
-            return
-        if not messagebox.askyesno("Dernière confirmation",
-                                   "Confirmez-vous la suppression de cette vidéo ?"):
-            return
-        self._run(self._do_myvids_delete, v)
-
-    def _do_myvids_delete(self, v):
-        """(Thread) DELETE de la vidéo puis retrait des caches et de l'affichage."""
-        slug = v.get("slug", "")
-        try:
-            self.api.delete_video(v)
-            if v in self.myvids_videos:
-                self.myvids_videos.remove(v)
-            self.myvids_selected = None
-            self._ui(self._log, f"🗑 Vidéo supprimée : {slug}")
-            self._ui(self._myvids_render_detail)
-            self._ui(self._myvids_apply_filter)
-        except Exception as e:
-            self._ui(self._log, f"❌ Suppression {slug} : {e}")
-            self._ui(self._myvids_set_msg, f"❌  {message_utilisateur(e)}", T_ERREUR)
 
     def _build_tab_config(self):
         """Construit l'onglet Configuration (connexion API + choix de l'agent déposant)."""
@@ -4244,8 +4153,8 @@ class App(_AppBase):
              "sinon à sa prochaine ouverture.\n\n"
              "Depuis ce panneau, vous pouvez : renommer la vidéo, changer son "
              "statut (brouillon / public / restreint) et son type, ajouter des "
-             "co-propriétaires, gérer les sous-titres, remplacer le fichier vidéo, "
-             "ou supprimer la vidéo.\n\n"
+             "co-propriétaires, gérer les sous-titres, ou remplacer le fichier "
+             "vidéo.\n\n"
              "Depuis la section Classement, « 🏷️ Disciplines… » choisit les "
              "disciplines de la vidéo ; dans Relations, « 🗂 Chaînes et thèmes… » "
              "la place dans des chaînes et leurs thèmes (cocher un thème coche sa "
@@ -4254,8 +4163,7 @@ class App(_AppBase):
              "sélectionne une plage, « ☑ Tout sélectionner » prend toutes les "
              "vidéos affichées. Le panneau de droite propose alors d'agir sur tout "
              "le lot : statut, type, disciplines, chaînes et thèmes (en ajout ou en "
-             "remplacement), suppression. Une confirmation est toujours demandée. "
-             "Les vidéos en co-propriété (👥) sont ignorées par la suppression. "
+             "remplacement). Une confirmation est toujours demandée. "
              "Un clic simple revient à une seule vidéo.\n\n"
              "Les filtres en haut (texte, chaîne, type, statut) permettent de "
              "retrouver rapidement une vidéo quand la liste est longue. Le bouton "
@@ -4276,17 +4184,7 @@ class App(_AppBase):
              "ré-encodage, la vidéo peut apparaître indisponible quelques minutes sur "
              "le site : c'est normal."),
 
-            ("10. Supprimer une vidéo",
-             "Le bouton « Supprimer cette vidéo » (zone sensible, en rouge) efface "
-             "DÉFINITIVEMENT la vidéo de la plateforme. Il n'y a pas de corbeille sur "
-             "Pod : une suppression est irréversible. Une double confirmation est "
-             "demandée. En cas de doute, préférez passer la vidéo en « brouillon » : "
-             "elle devient invisible sans être perdue.\n\n"
-             "Seul le PROPRIÉTAIRE peut supprimer une vidéo. Sur une vidéo dont "
-             "vous êtes co-propriétaire (👥), le bouton n'apparaît pas : vous pouvez "
-             "la modifier, mais pas la supprimer."),
-
-            ("11. En cas d'échec réseau (relance)",
+            ("10. En cas d'échec réseau (relance)",
              "Sur les gros fichiers, l'envoi peut échouer à cause d'une coupure "
              "réseau passagère — ce n'est pas un défaut de l'application. Trois "
              "protections existent :\n"
@@ -4309,13 +4207,13 @@ class App(_AppBase):
              "plus dure (taille, réseau de l'établissement) : signalez-le au "
              "support."),
 
-            ("12. Journal",
+            ("11. Journal",
              "L'onglet « Journal » conserve l'historique horodaté des opérations "
              "(connexions, envois, encodages, erreurs). En cas de problème, c'est la "
              "première chose à consulter. Le bouton « Effacer » vide l'affichage "
              "(sans effet sur les vidéos déjà déposées)."),
 
-            ("13. Sécurité du token",
+            ("12. Sécurité du token",
              "Votre token est stocké dans le coffre-fort sécurisé de votre système "
              "(Gestionnaire d'identifiants Windows / Trousseau macOS), jamais en clair "
              "ni dans l'application. Il reste sur ce poste : copier le programme sur un "
@@ -4323,7 +4221,7 @@ class App(_AppBase):
              "Le bouton « Oublier le token / Se déconnecter » (onglet Configuration) "
              "efface le token de ce poste."),
 
-            ("14. Mises à jour",
+            ("13. Mises à jour",
              "Au démarrage, l'application vérifie s'il existe une version plus "
              "récente. Si c'est le cas, un bandeau apparaît en bas de la barre "
              "latérale avec un bouton « Télécharger » : installez la nouvelle "
@@ -4336,12 +4234,12 @@ class App(_AppBase):
              "réapparaît tant que la mise à jour n'est pas installée, même sans "
              "connexion internet."),
 
-            ("15. Mode clair ou sombre",
+            ("14. Mode clair ou sombre",
              "Le bouton en bas de la barre latérale bascule entre le mode clair et "
              "le mode sombre. Votre choix est mémorisé pour les prochaines "
              "ouvertures."),
 
-            ("16. Problèmes courants",
+            ("15. Problèmes courants",
              "• « 0 utilisateur » lors du chargement des comptes : le token n'a pas le "
              "droit de lister les utilisateurs. Le dépôt reste possible, mais la "
              "recherche de comptes est limitée — voyez avec le service informatique.\n"

@@ -166,3 +166,15 @@ au moment du blocage (même arrêt que le bouton 🛑).
 À tester sur GitHub, une fois la branche poussée : Run workflow → blocage =
 bloquer, vérifier `etat.json` sur le dépôt public et le voile sur un poste ;
 puis débloquer.
+
+## Suppression de vidéos retirée de « Mes vidéos » (décision du 28/09/2026)
+
+Plus de bouton « 🗑 Supprimer cette vidéo » dans le panneau d'une vidéo, ni
+de « 🗑 Supprimer N vidéo(s) » en sélection multiple (zones « Zone sensible »
+retirées). Le code suit : plus de `_myvids_delete`, `_myvids_lot_supprimer`,
+ni de `PodAPI.delete_video` ; le Téléverseur n'a plus aucun moyen de supprimer
+une vidéo. La suppression des sous-titres reste possible.
+
+L'aide n'en parle plus : rubrique « 10. Supprimer une vidéo » retirée, les
+suivantes renumérotées (10 à 15). Les tutoriels n'en parlent pas non plus.
+Tests : `tests/test_sans_suppression.py` (8 tests, 8 mutations).

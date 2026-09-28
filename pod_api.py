@@ -710,9 +710,8 @@ class PodAPI:
             payload["theme"] = list(theme_urls)
         return self.patch_video(video, payload)
 
-    def delete_video(self, video) -> bool:
-        """⚠️ Suppression définitive d'une vidéo (DELETE)."""
-        return self._delete(self._video_endpoint(video))
+    # (Pas de delete_video : le Téléverseur ne supprime aucune vidéo —
+    #  décision du 28/09/2026, voir app.py `_myvids_render_detail`.)
 
     # Aides au module Nettoyage (logique pure, testable sans réseau) ───────
 

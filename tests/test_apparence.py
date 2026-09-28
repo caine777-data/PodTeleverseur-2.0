@@ -502,23 +502,6 @@ class TestCoProprieteDansMesVideos:
         v = {"owner": f"{self.B}/users/7/", "additional_owners": [f"{self.B}/users/142/"]}
         assert a._role_sur_video(v, a._myvids_owner_ids()) is None
 
-    def test_la_suppression_est_refusee_au_coproprietaire(self, app, monkeypatch):
-        """⚠️ La boîte de confirmation est REMPLACÉE : sans cela, un garde-fou
-        manquant ouvrait la vraie boîte, qui attendait un clic — la suite de
-        tests se figeait au lieu d'échouer (vu par mutation)."""
-        import app as module_app
-        a = self._app(app)
-        appels, confirmations = [], []
-        a._run = lambda *x, **k: appels.append(x)
-        a._myvids_set_msg = lambda *x, **k: None
-        monkeypatch.setattr(module_app.messagebox, "askyesno",
-                            lambda *x, **k: confirmations.append(x) or True)
-        v = {"slug": "s", "title": "T", "owner": f"{self.B}/users/7/",
-             "additional_owners": [f"{self.B}/users/42/"]}
-        a._myvids_delete(v)
-        assert not confirmations, "une confirmation de suppression a été demandée"
-        assert not appels, "la suppression a été lancée pour un co-propriétaire"
-
 
 class TestAide:
     """L'aide doit décrire l'application telle qu'elle est.
@@ -544,7 +527,7 @@ class TestAide:
         source, bloc = self._sections()
         reste = source.replace(bloc, "")
         cites = ["🔄 Rafraîchir", "Ouvrir dans le navigateur",
-                 "Télécharger la mise à jour", "Supprimer cette vidéo", "Quitter"]
+                 "Télécharger la mise à jour", "Quitter"]
         for nom in cites:
             assert nom in bloc, f"l'aide ne cite plus « {nom} »"
             mots = nom.replace("🔄 ", "")
@@ -682,20 +665,6 @@ class TestSelectionMultiple:
         source = open(os.path.join(RACINE, "app.py"), encoding="utf-8").read()
         assert '"<Control-ButtonRelease-1>", lambda e: "break"' in source
         assert '"<Shift-ButtonRelease-1>", lambda e: "break"' in source
-
-    def test_la_suppression_en_lot_ignore_la_copropriete(self, app, monkeypatch):
-        import app as module_app
-        supprimees = []
-
-        class _API:
-            def delete_video(self, v):
-                supprimees.append(v["slug"])
-        app.api = _API()
-        monkeypatch.setattr(module_app.messagebox, "askyesno", lambda *x, **k: True)
-        app._myvids_tout_selectionner()
-        app._myvids_lot_supprimer()
-        assert "co" not in supprimees, "une vidéo en co-propriété a été supprimée"
-        assert sorted(supprimees) == ["v0", "v1", "v2", "v3"]
 
     def test_un_echec_n_arrete_pas_le_lot(self, app):
         """Chaque vidéo est traitée INDÉPENDAMMENT."""
