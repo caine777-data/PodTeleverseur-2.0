@@ -260,13 +260,18 @@ cocher « obligatoire » bloquerait tous les postes encore en v2.
 
 ## Sélection multiple dans « Mes vidéos » (depuis la 3.4.0)
 
-Ctrl+clic, Maj+clic (plage) et « ☑ Tout sélectionner ». Le panneau de lot
-propose : statut, type, disciplines, chaînes et thèmes (ajout ou remplacement,
-calcul `calculer_chaines_themes` repris de PodAdmin), suppression. Chaque action
-demande confirmation ; la suppression, une double confirmation.
+Ctrl+clic, Maj+clic (plage) et « ☑ Tout sélectionner ». Le panneau de lot a
+la même présentation que celui de PodAdmin (`_myvids_render_lot`, teintes
+`COULEURS_LOT`) : liste des vidéos concernées, boutons Mettre en brouillon /
+Rendre public / Rendre restreint / Affecter à une chaîne (ajout ou
+remplacement, calcul `calculer_chaines_themes` repris de PodAdmin), Classement
+(type, disciplines), « 🛑 Interrompre le traitement », « ✖ Annuler la
+sélection ». Chaque action demande confirmation. Absents par rapport à
+PodAdmin : « Restreindre au groupe… » (pas de groupes d'accès) et la zone de
+suppression (retirée en 3.4.2).
 
-- ⚠️ La suppression en lot **ignore les vidéos en co-propriété** : Pod la refuse
-  à un co-propriétaire.
+- ⚠️ L'interruption est **propre** : la vidéo en cours est terminée, le lot
+  s'arrête avant la suivante (`myvids_lot_interrompu`).
 - ⚠️ Chaque vidéo est traitée **indépendamment** : un échec n'arrête pas le lot,
   le bilan compte réussites et échecs (détail au Journal).
 - ⚠️ CTkButton agit au **relâchement** du clic : les liaisons

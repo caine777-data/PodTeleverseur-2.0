@@ -89,6 +89,17 @@ STATUTS = {"Brouillon": {"is_draft": True, "is_restricted": False},
            "Public":    {"is_draft": False, "is_restricted": False},
            "Restreint": {"is_draft": False, "is_restricted": True}}
 
+# Boutons du panneau de sélection multiple (« Mes vidéos »). Mêmes teintes que
+# dans PodAdmin (COULEURS_LOT), voulues par Cédric : aplats vifs à texte blanc,
+# identiques dans les deux modes. Pas de « groups » ici : le Téléverseur ne
+# gère pas les groupes d'accès.
+COULEURS_LOT = {
+    "draft":      ("gray35", "gray35"),
+    "public":     ("#15803d", "#15803d"),
+    "restricted": ("#b45309", "#b45309"),
+    "channels":   ("#2563eb", "#2563eb"),
+}
+
 # Texte de la fenêtre de mise à jour OBLIGATOIRE. Volontairement neutre : il
 # ne donne jamais la raison du blocage (voir `_bloquer_demarrage`).
 MESSAGE_BLOCAGE = ("Une nouvelle version de Pod Téléverseur est nécessaire "
@@ -1679,6 +1690,8 @@ class App(_AppBase):
         self.myvids_themes = []          # thèmes (sélecteur chaînes & thèmes)
         self.myvids_multi = []           # slugs de la sélection multiple, dans l'ordre
         self._myvids_ancre = None        # point de départ d'une sélection Maj+clic
+        self._myvids_lot_actif = False   # un lot (sélection multiple) est en cours
+        self.myvids_lot_interrompu = threading.Event()   # « Interrompre le traitement »
         self.myvids_chan_by_url = {}     # URL chaîne → titre
         self.myvids_filtered = []        # sous-ensemble affiché (après filtres)
         self.myvids_selected = None      # vidéo en cours d'édition
@@ -2193,55 +2206,88 @@ class App(_AppBase):
         return [par_slug[s] for s in self.myvids_multi if s in par_slug]
 
     def _myvids_render_lot(self):
-        """Panneau des actions sur la sélection multiple."""
+        """Panneau des actions sur la sélection multiple.
+
+        Même présentation que le panneau de lot de PodAdmin (onglet Vidéos),
+        moins deux blocs absents du Téléverseur : « Restreindre au groupe… »
+        (pas de groupes d'accès ici) et la « Zone sensible » (pas de
+        suppression, voir `_myvids_render_detail`)."""
         vids = self._myvids_lot()
+        n = len(vids)
         d = self.myvids_detail
-        ctk.CTkLabel(d, text=f"{len(vids)} vidéos sélectionnées",
-                     font=ctk.CTkFont(size=15, weight="bold")).pack(anchor="w", padx=4, pady=(4, 0))
-        apercu = ", ".join((x.get("title") or "?")[:30] for x in vids[:4])
-        ctk.CTkLabel(d, text=apercu + ("…" if len(vids) > 4 else ""), wraplength=420,
-                     justify="left", text_color=T_SECONDAIRE,
-                     font=ctk.CTkFont(size=11)).pack(anchor="w", padx=4)
-        ctk.CTkLabel(d, text="Ctrl+clic : ajouter ou retirer · Maj+clic : plage · "
-                             "clic simple : revenir à une vidéo.",
-                     text_color=T_DISCRET, font=ctk.CTkFont(size=10)).pack(anchor="w", padx=4, pady=(2, 6))
 
-        def titre(t):
-            ctk.CTkLabel(d, text=t, anchor="w", font=ctk.CTkFont(size=12, weight="bold")
-                         ).pack(anchor="w", padx=4, pady=(10, 2))
+        ctk.CTkLabel(d, text=f"☑  {n} vidéos sélectionnées",
+                     font=ctk.CTkFont(size=16, weight="bold")).pack(
+            anchor="w", padx=6, pady=(6, 2))
+        ctk.CTkLabel(d, text="Ctrl+clic pour ajouter ou retirer une vidéo, "
+                             "Maj+clic pour une plage.",
+                     font=ctk.CTkFont(size=11), text_color=T_DISCRET,
+                     wraplength=420, justify="left").pack(anchor="w", padx=6)
 
-        titre("Statut")
-        seg = ctk.CTkSegmentedButton(d, values=list(STATUTS))
-        seg.pack(fill="x", padx=4)
-        seg.configure(command=lambda choix: self._myvids_lot_statut(choix, seg))
+        # Aperçu des titres retenus, pour ne pas agir à l'aveugle.
+        apercu = ctk.CTkScrollableFrame(d, height=110, label_text="Vidéos concernées",
+                                        fg_color=S_CARTE, label_anchor="w",
+                                        label_font=ctk.CTkFont(size=12, weight="bold"))
+        apercu.pack(fill="x", padx=4, pady=8)
+        for v in vids[:60]:
+            ctk.CTkLabel(apercu, text=f"• {(v.get('title') or '(sans titre)')[:46]}",
+                         font=ctk.CTkFont(size=11), anchor="w").pack(anchor="w")
+        if n > 60:
+            ctk.CTkLabel(apercu, text=f"… et {n - 60} autre(s)", font=ctk.CTkFont(size=11),
+                         text_color=T_SECONDAIRE).pack(anchor="w")
 
-        titre("Classement")
+        ctk.CTkLabel(d, text="Appliquer à toute la sélection",
+                     font=ctk.CTkFont(size=12, weight="bold")).pack(
+            anchor="w", padx=6, pady=(6, 2))
+        for libelle, commande, couleur in (
+                ("📝  Mettre en brouillon", lambda: self._myvids_lot_statut("Brouillon"),
+                 COULEURS_LOT["draft"]),
+                ("🌐  Rendre public", lambda: self._myvids_lot_statut("Public"),
+                 COULEURS_LOT["public"]),
+                ("🔒  Rendre restreint", lambda: self._myvids_lot_statut("Restreint"),
+                 COULEURS_LOT["restricted"]),
+                ("📺  Affecter à une chaîne…", self._myvids_lot_chaines,
+                 COULEURS_LOT["channels"])):
+            ctk.CTkButton(d, text=libelle, anchor="w", fg_color=couleur,
+                          text_color="white", command=commande).pack(fill="x", padx=6, pady=2)
+
+        # — Classement : le type ne s'applique pas au simple changement du
+        # menu (un clic de travers modifierait N vidéos) ; il faut le bouton,
+        # qui porte le NOMBRE de vidéos, puis une confirmation.
+        ctk.CTkLabel(d, text="Classement", font=ctk.CTkFont(size=12, weight="bold")).pack(
+            anchor="w", padx=6, pady=(10, 2))
         ligne = ctk.CTkFrame(d, fg_color="transparent")
-        ligne.pack(fill="x", padx=4)
+        ligne.pack(fill="x", padx=6)
         types = sorted(getattr(self, "type_map", {}) or {}, key=str.lower) or ["(aucun type)"]
-        menu_type = ctk.CTkOptionMenu(ligne, width=180, values=types, **STYLE_CHAMP)
+        menu_type = ctk.CTkOptionMenu(ligne, width=170, values=types, **STYLE_CHAMP)
         menu_type.pack(side="left")
         ctk.CTkButton(ligne, text=f"Appliquer le type à {len(vids)} vidéos", fg_color=C_NEUTRE,
                       hover_color=C_NEUTRE_SURV, text_color=T_SUR_NEUTRE,
                       command=lambda: self._myvids_lot_type(menu_type.get())
                       ).pack(side="left", padx=(6, 0))
-        ctk.CTkButton(d, text="🏷️  Disciplines…", fg_color=C_NEUTRE, hover_color=C_NEUTRE_SURV,
-                      text_color=T_SUR_NEUTRE, command=self._myvids_lot_disciplines
-                      ).pack(anchor="w", padx=4, pady=(6, 0))
-
-        titre("Relations")
-        ctk.CTkButton(d, text="🗂  Chaînes et thèmes…", fg_color=C_NEUTRE,
+        ctk.CTkButton(d, text="🏷️  Disciplines…", anchor="w", fg_color=C_NEUTRE,
                       hover_color=C_NEUTRE_SURV, text_color=T_SUR_NEUTRE,
-                      command=self._myvids_lot_chaines).pack(anchor="w", padx=4)
+                      command=self._myvids_lot_disciplines).pack(anchor="w", padx=6, pady=(6, 0))
 
-        # Pas de suppression en lot non plus (voir `_myvids_render_detail`).
-
-        ctk.CTkButton(d, text="Désélectionner tout", fg_color=C_NEUTRE,
-                      hover_color=C_NEUTRE_SURV, text_color=T_SUR_NEUTRE,
-                      command=self._myvids_vider_selection).pack(anchor="w", padx=4, pady=(14, 0))
         self.myvids_msg = ctk.CTkLabel(d, text="", text_color=T_SECONDAIRE,
-                                       wraplength=420, justify="left")
-        self.myvids_msg.pack(anchor="w", padx=4, pady=(8, 4))
+                                       font=ctk.CTkFont(size=11), wraplength=420,
+                                       justify="left", anchor="w")
+        self.myvids_msg.pack(fill="x", padx=6, pady=(6, 2))
+
+        # Interruption d'un lot en cours. Désactivé au repos : un bouton
+        # toujours cliquable laisserait croire qu'il fait quelque chose.
+        actif = self._myvids_lot_actif
+        self.myvids_stop_btn = ctk.CTkButton(
+            d, text="🛑  Interrompre le traitement", fg_color=C_ALERTE,
+            hover_color=C_ALERTE_SURV, text_color="white",
+            state="normal" if actif else "disabled", command=self._myvids_lot_interrompre)
+        self.myvids_stop_btn.pack(fill="x", padx=6, pady=(0, 2))
+
+        # Pas de « Zone sensible » : aucune suppression en lot.
+
+        ctk.CTkButton(d, text="✖  Annuler la sélection", fg_color=C_NEUTRE,
+                      hover_color=C_NEUTRE_SURV, text_color=T_SUR_NEUTRE,
+                      command=self._myvids_vider_selection).pack(fill="x", padx=6, pady=(8, 6))
 
     # — Actions de lot —
 
@@ -2334,14 +2380,43 @@ class App(_AppBase):
                      "vidéos sélectionnées. Cocher un thème coche sa chaîne.")
 
     def _myvids_lancer_lot(self, vids, action, apres, libelle):
+        if self._myvids_lot_actif:
+            self._myvids_set_msg("Un traitement est déjà en cours : attendez sa fin "
+                                 "ou interrompez-le.", T_ALERTE)
+            return
+        self._myvids_lot_actif = True
+        self.myvids_lot_interrompu.clear()
+        try:
+            self.myvids_stop_btn.configure(state="normal", text="🛑  Interrompre le traitement")
+        except Exception:
+            pass
         self._myvids_set_msg(f"⏳  {libelle} : {len(vids)} vidéo(s) en cours…", T_SECONDAIRE)
         self._run(self._do_myvids_lot, list(vids), action, apres, libelle)
 
+    def _myvids_lot_interrompre(self):
+        """Arrêt PROPRE du lot : la vidéo en cours est menée à son terme, le
+        traitement s'arrête avant la suivante (jamais au milieu d'une
+        opération, ce qui laisserait un état incohérent côté serveur)."""
+        self.myvids_lot_interrompu.set()
+        try:
+            self.myvids_stop_btn.configure(state="disabled", text="⏳  Arrêt en cours…")
+        except Exception:
+            pass
+        self._myvids_set_msg("Arrêt demandé : la vidéo en cours est terminée…", T_ALERTE)
+
+    def _myvids_lot_fini(self):
+        self._myvids_lot_actif = False
+
     def _do_myvids_lot(self, vids, action, apres, libelle):
         """(Thread) Applique `action` à chaque vidéo, INDÉPENDAMMENT : un échec
-        n'arrête pas les suivantes. `apres` met à jour le cache local."""
+        n'arrête pas les suivantes. `apres` met à jour le cache local.
+        S'arrête entre deux vidéos si l'interruption est demandée."""
         ok, echecs = 0, []
-        for v in vids:
+        restantes = 0
+        for i, v in enumerate(vids):
+            if self.myvids_lot_interrompu.is_set():
+                restantes = len(vids) - i
+                break
             try:
                 action(v)
                 apres(v)
@@ -2349,15 +2424,20 @@ class App(_AppBase):
             except Exception as e:
                 echecs.append(v.get("title") or v.get("slug") or "?")
                 self._ui(self._log, f"❌ {libelle} — {v.get('slug')} : {e}")
-        self._ui(self._log, f"Lot « {libelle} » : {ok} réussie(s), {len(echecs)} échec(s).")
+        self._ui(self._log, f"Lot « {libelle} » : {ok} réussie(s), {len(echecs)} échec(s)"
+                            + (f", {restantes} non traitée(s) (interrompu)." if restantes else "."))
         texte = f"✅  {libelle} : {ok} vidéo(s)."
+        if restantes:
+            texte = (f"🛑  {libelle} interrompu : {ok} vidéo(s) traitée(s), "
+                     f"{restantes} non traitée(s).")
         if echecs:
             texte += f" {len(echecs)} échec(s) : {', '.join(echecs[:3])}"
             texte += "…" if len(echecs) > 3 else ""
             texte += " (détail dans le Journal)."
+        self._ui(self._myvids_lot_fini)
         self._ui(self._myvids_apply_filter)
         self._ui(self._myvids_render_detail)
-        self._ui(self._myvids_set_msg, texte, T_ALERTE if echecs else T_SUCCES)
+        self._ui(self._myvids_set_msg, texte, T_ALERTE if echecs or restantes else T_SUCCES)
 
     # — Une seule vidéo : disciplines, chaînes et thèmes —
 
@@ -4161,10 +4241,13 @@ class App(_AppBase):
              "chaîne).\n\n"
              "SÉLECTION MULTIPLE : Ctrl+clic ajoute ou retire une vidéo, Maj+clic "
              "sélectionne une plage, « ☑ Tout sélectionner » prend toutes les "
-             "vidéos affichées. Le panneau de droite propose alors d'agir sur tout "
-             "le lot : statut, type, disciplines, chaînes et thèmes (en ajout ou en "
-             "remplacement). Une confirmation est toujours demandée. "
-             "Un clic simple revient à une seule vidéo.\n\n"
+             "vidéos affichées. Le panneau de droite liste les vidéos concernées "
+             "et propose d'agir sur tout le lot : mettre en brouillon, rendre "
+             "public, rendre restreint, affecter à une chaîne (en ajout ou en "
+             "remplacement), appliquer un type, choisir des disciplines. Une "
+             "confirmation est toujours demandée. « 🛑 Interrompre le "
+             "traitement » arrête le lot après la vidéo en cours. « ✖ Annuler la "
+             "sélection », ou un clic simple, revient à une seule vidéo.\n\n"
              "Les filtres en haut (texte, chaîne, type, statut) permettent de "
              "retrouver rapidement une vidéo quand la liste est longue. Le bouton "
              "« Ouvrir dans le navigateur » affiche la vidéo dans votre navigateur."),
