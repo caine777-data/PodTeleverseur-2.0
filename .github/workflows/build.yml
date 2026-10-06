@@ -1,16 +1,19 @@
 name: Build installers
 
-# Compile Pod Téléverseur et fabrique les livrables D'INSTALLATION SEULEMENT
-# (plus de version portable, depuis la mise à jour du 2.2.x) :
+# Compile Pod Téléverseur et publie les livrables D'INSTALLATION SEULEMENT
+# (plus de version portable) :
 #   • PodTeleverseur-Windows-Setup.exe — installeur Inno Setup
 #   • PodTeleverseur-macOS.dmg         — image disque
 #
-# Chaque nom de fichier PUBLIÉ porte explicitement son OS, pour qu'une personne
-# qui télécharge depuis la page de Release ne puisse pas se tromper.
+# Chaque nom de fichier PUBLIÉ porte son OS, pour qu'une personne qui
+# télécharge depuis la page de Release ne puisse pas se tromper.
 #
 # Déclencheurs :
-#   • Bouton "Run workflow" dans l'onglet Actions (build manuel)
-#   • Push d'un tag v* (ex : v1.0.0) → crée automatiquement une Release GitHub
+#   • Bouton « Run workflow » dans l'onglet Actions (build manuel)
+#   • Push d'un tag v* (ex : v3.0.0) → crée automatiquement une Release GitHub
+#
+# NB : les runners macOS de GitHub sont Apple Silicon → l'app produite est arm64
+#      (ne tourne pas sur Mac Intel sans adaptation).
 
 on:
   push:
@@ -44,10 +47,33 @@ on:
           jour sera alors bloqué.
         required: false
         default: ""
+      blocage:
+        description: >-
+          Blocage à distance, INDÉPENDANT de la mise à jour ci-dessus (voir
+          BLOCAGE.md). « bloquer » : toutes les applications installées
+          affichent « Pod Téléverseur n'est pas disponible » et deviennent
+          inutilisables (seul Quitter reste possible). « débloquer » : elles
+          redeviennent normales. Ces deux choix ne compilent rien. Laisser
+          « ne rien changer » pour une compilation/publication normale — état
+          par défaut, ce blocage ne se déclenche donc jamais tout seul.
+        type: choice
+        options:
+          - ne rien changer
+          - bloquer
+          - débloquer
+        default: ne rien changer
+
+# Moindre privilège : par défaut, le jeton GITHUB_TOKEN de chaque job ne peut
+# que LIRE le dépôt. Les jobs de compilation n'ont rien à y écrire ; seul le
+# job « release » reçoit, plus bas, contents: write pour créer la Release.
+permissions:
+  contents: read
 
 jobs:
   # ─────────────────────────────── WINDOWS ───────────────────────────────
   build-windows:
+    # Ignoré quand on actionne le blocage (voir le job « blocage »).
+    if: inputs.blocage != 'bloquer' && inputs.blocage != 'débloquer'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -62,46 +88,98 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      # Étape 1 : PyInstaller → PodTeleverseur.exe
-      - name: Compiler PodTeleverseur.exe (PyInstaller)
+      # L'icône de l'application est fournie dans assets/icon.ico.
+      # On la copie sous le nom attendu par l'étape de compilation.
+      - name: Préparer l'icône Windows
+        run: copy assets\icon.ico assets\podteleverseur.ico
+
+      - name: Compiler PodTeleverseur.exe (portable)
         run: |
+          $icon = (Test-Path "assets/podteleverseur.ico") ? "--icon=assets/podteleverseur.ico" : ""
           pyinstaller --onefile --windowed --name "PodTeleverseur" `
-            --icon "assets/icon.ico" `
             --version-file version.txt `
+            $icon `
             --collect-all customtkinter `
             --collect-all keyring `
             --collect-all tkinterdnd2 `
             --add-data "assets;assets" `
             app.py
 
-      # Étape 2 : Inno Setup → PodTeleverseur-Setup.exe
+      # Le portable n'est plus publié : seul l'installeur figure dans la
+      # Release. L'exe reste produit ici, car Inno Setup l'embarque.
+
+      # Installe Inno Setup (compilateur d'installeurs Windows) via Chocolatey.
       - name: Installer Inno Setup
-        run: choco install innosetup --no-progress -y
+        run: choco install innosetup -y --no-progress
 
-      - name: Fabriquer l'installeur Windows (Inno Setup)
+      # Génère le script .iss puis compile l'installeur.
+      # Installation SANS droits administrateur (dans le profil utilisateur),
+      # avec raccourcis menu Démarrer + Bureau et désinstalleur.
+      - name: Fabriquer l'installeur (Inno Setup)
         run: |
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "installer\installer.iss"
+          # Version lue dans __version__.py : elle était écrite ici EN DUR
+          # (3.1.0) et restait fausse dans l'installeur et la liste des
+          # programmes Windows à chaque nouvelle version.
+          $ver = (Select-String -Path "__version__.py" -Pattern '__version__\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          if (-not $ver) { Write-Error "Version introuvable dans __version__.py"; exit 1 }
+          Write-Host "Version de l'installeur : $ver"
+          $iss = @"
+          [Setup]
+          ; ⚠️ MÊME AppId que le Pod Téléverseur v2 : c'est lui qui fait
+          ; reconnaître la v3 comme une MISE À JOUR de la v2 (remplacement sur
+          ; place). Sans lui, les deux coexisteraient dans la liste des
+          ; programmes. Ne jamais le modifier.
+          AppId={{8F3A6C21-4D7B-4E2A-9C15-7B2E5D9A1C04}}
+          AppName=Pod Televerseur
+          AppVersion=$ver
+          AppPublisher=Universite de Toulouse
+          DefaultDirName={localappdata}\Programs\PodTeleverseur
+          DefaultGroupName=Pod Televerseur
+          PrivilegesRequired=lowest
+          OutputDir=installer
+          OutputBaseFilename=PodTeleverseur-Setup
+          Compression=lzma
+          SolidCompression=yes
+          SetupIconFile=assets\podteleverseur.ico
+          WizardStyle=modern
 
-      # Publication des deux livrables Windows comme artefacts du run
-      # Seul l'INSTALLEUR est conservé : la Release ne propose plus de version
-      # portable. Renommé ici, PENDANT la compilation, pour que « Windows »
-      # figure dans le nom du FICHIER lui-même — c'est ce nom que verra la
-      # personne qui télécharge, et c'est lui qui doit être sans ambiguïté.
-      # Le préfixer dans le libellé de l'artefact GitHub n'aurait pas suffi :
-      # ce libellé n'apparaît nulle part sur la page de téléchargement finale.
+          [Languages]
+          Name: "french"; MessagesFile: "compiler:Languages\French.isl"
+
+          [Files]
+          Source: "dist\PodTeleverseur.exe"; DestDir: "{app}"; Flags: ignoreversion
+
+          [Icons]
+          Name: "{group}\Pod Televerseur"; Filename: "{app}\PodTeleverseur.exe"
+          Name: "{group}\Desinstaller Pod Televerseur"; Filename: "{uninstallexe}"
+          Name: "{userdesktop}\Pod Televerseur"; Filename: "{app}\PodTeleverseur.exe"
+
+          [Run]
+          Filename: "{app}\PodTeleverseur.exe"; Description: "Lancer Pod Televerseur"; Flags: nowait postinstall skipifsilent
+          "@
+          # Si l'icône n'a pas été générée, on retire la ligne SetupIconFile.
+          if (-not (Test-Path "assets/podteleverseur.ico")) {
+            $iss = $iss -replace "SetupIconFile=assets\\podteleverseur.ico`r?`n", ""
+          }
+          Set-Content -Path "PodTeleverseur.iss" -Value $iss -Encoding UTF8
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "PodTeleverseur.iss"
+
+      # Renommé PENDANT la compilation : c'est le nom du FICHIER que verra
+      # la personne qui télécharge, pas le libellé de l'artefact GitHub.
       - name: Renommer l'installeur avec le nom d'OS explicite
         run: |
-          Rename-Item "installer_output\PodTeleverseur-Setup.exe" `
+          Rename-Item "installer\PodTeleverseur-Setup.exe" `
             "PodTeleverseur-Windows-Setup.exe"
 
-      - name: Publier PodTeleverseur-Windows-Setup.exe
+      - name: Publier l'installeur Windows
         uses: actions/upload-artifact@v4
         with:
           name: PodTeleverseur-Windows-Setup
-          path: installer_output/PodTeleverseur-Windows-Setup.exe
+          path: installer/PodTeleverseur-Windows-Setup.exe
 
   # ──────────────────────────────── macOS ────────────────────────────────
   build-macos:
+    if: inputs.blocage != 'bloquer' && inputs.blocage != 'débloquer'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -116,88 +194,91 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      # Fabrication de l'icône .icns macOS depuis le master PNG 1024×1024
-      # (sips + iconutil sont des outils natifs macOS, disponibles sur les runners)
-      - name: Fabriquer l'icône macOS (.icns)
+      # Génère l'icône macOS (.icns) à partir du PNG master, via les outils
+      # Apple sips/iconutil (présents uniquement sur les runners macOS).
+      - name: Générer l'icône macOS (.icns)
         run: |
           mkdir -p icon.iconset
-          sips -z 16   16   assets/icon_master.png --out icon.iconset/icon_16x16.png
-          sips -z 32   32   assets/icon_master.png --out icon.iconset/icon_16x16@2x.png
-          sips -z 32   32   assets/icon_master.png --out icon.iconset/icon_32x32.png
-          sips -z 64   64   assets/icon_master.png --out icon.iconset/icon_32x32@2x.png
-          sips -z 128  128  assets/icon_master.png --out icon.iconset/icon_128x128.png
-          sips -z 256  256  assets/icon_master.png --out icon.iconset/icon_128x128@2x.png
-          sips -z 256  256  assets/icon_master.png --out icon.iconset/icon_256x256.png
-          sips -z 512  512  assets/icon_master.png --out icon.iconset/icon_256x256@2x.png
-          sips -z 512  512  assets/icon_master.png --out icon.iconset/icon_512x512.png
-          cp assets/icon_master.png icon.iconset/icon_512x512@2x.png
+          for s in 16 32 64 128 256 512; do
+            sips -z $s $s assets/icon_master.png --out "icon.iconset/icon_${s}x${s}.png"
+            d=$((s*2))
+            sips -z $d $d assets/icon_master.png --out "icon.iconset/icon_${s}x${s}@2x.png"
+          done
           iconutil -c icns icon.iconset -o assets/icon.icns
 
-      # Étape 1 : PyInstaller → PodTeleverseur.app
-      - name: Compiler PodTeleverseur.app (PyInstaller)
+      - name: Compiler PodTeleverseur.app
         run: |
+          # --onefile : build macOS léger (~20-30 Mo) au prix d'un avertissement
+          # de dépréciation PyInstaller (toléré aujourd'hui, bloquant en v7.0).
           pyinstaller --onefile --windowed --name "PodTeleverseur" \
-            --icon "assets/icon.icns" \
+            --icon assets/icon.icns \
             --collect-all customtkinter \
             --collect-all keyring \
             --collect-all tkinterdnd2 \
             --add-data "assets:assets" \
             app.py
 
-      # Sur Apple Silicon, macOS EXIGE que tout exécutable porte une signature
-      # valide. Sans elle, le système refuse l'application avec le message
-      # trompeur « est endommagé et ne peut pas être ouvert » — alors que le
-      # fichier est intact. Une signature « ad hoc » (-s -) suffit à lever ce
-      # blocage : elle ne certifie pas l'éditeur (il faudrait un compte Apple
-      # Developer payant), mais elle rend le paquet cohérent.
-      - name: Signer l'application (signature ad hoc)
-        run: |
-          codesign --force --deep --sign - "dist/PodTeleverseur.app"
-          codesign --verify --deep --strict --verbose=2 "dist/PodTeleverseur.app"
+      # Le .zip de l'archive .app n'est plus fabriqué : il n'est plus publié.
+      # (Le jour où il reviendrait : utiliser `ditto`, pas `zip`, qui casse la
+      # signature et fait réapparaître « est endommagé ».)
 
-      # Étape 2 : DMG (image disque avec raccourci vers /Applications)
-      - name: Fabriquer le DMG macOS
+      - name: Fabriquer le DMG (glisser-déposer vers Applications)
         run: |
           mkdir -p dmg_stage
-          # `ditto` préserve la signature et les liens internes du paquet,
-          # ce que `cp -R` ne garantit pas.
-          ditto "dist/PodTeleverseur.app" "dmg_stage/PodTeleverseur.app"
+          cp -R "dist/PodTeleverseur.app" dmg_stage/ 2>/dev/null || cp -R "dist/PodTeleverseur" dmg_stage/
           ln -s /Applications dmg_stage/Applications
           hdiutil create -volname "Pod Televerseur" -srcfolder dmg_stage \
             -ov -format UDZO "dist/PodTeleverseur.dmg"
 
-      # Étape 3 : ZIP de l'app (livrable historique conservé pour compatibilité)
-      - name: Compresser l'app en ZIP
-        run: |
-          cd dist
-      # Le .zip de l'archive .app n'est PLUS FABRIQUÉ : il n'est plus publié
-      # depuis la 2.2.x, et le construire pour rien allongerait le build sans
-      # raison. (Le piège `ditto` vs `zip` sur un .app reste vrai le jour où
-      # ce livrable reviendrait — ne pas utiliser `zip`, qui casse la
-      # signature et fait réapparaître « est endommagé ».)
-
-      # Publication du livrable macOS comme artefact du run
-      # Seul le .dmg est conservé : c'est l'équivalent macOS de l'installeur
-      # Windows. Renommé pour porter « macOS » dans le nom du fichier, comme
-      # pour Windows ci-dessus.
       - name: Renommer le .dmg avec le nom d'OS explicite
-        run: |
-          mv dist/PodTeleverseur.dmg dist/PodTeleverseur-macOS.dmg
+        run: mv dist/PodTeleverseur.dmg dist/PodTeleverseur-macOS.dmg
 
-      - name: Publier PodTeleverseur-macOS.dmg
+      - name: Publier le DMG macOS
         uses: actions/upload-artifact@v4
         with:
           name: PodTeleverseur-macOS-DMG
           path: dist/PodTeleverseur-macOS.dmg
 
-  # ──────────────────── Release GitHub (uniquement sur tag v*) ───────────
-  # Les 4 livrables sont joints à la Release : installeurs + portables.
+  # ──────────────────────── Blocage à distance ─────────────────────────
+  # Ne compile rien, ne concerne aucun numéro de version : écrit seulement
+  # etat.json sur le dépôt PUBLIC, lu par toutes les applications installées
+  # (au démarrage puis toutes les heures). RELEASES_TOKEN : même jeton, déjà
+  # configuré, que celui qui publie version.json. Voir BLOCAGE.md.
+  blocage:
+    name: Blocage à distance
+    if: inputs.blocage == 'bloquer' || inputs.blocage == 'débloquer'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Publier l'état
+        env:
+          RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          DEPOT: ${{ vars.RELEASES_REPO || format('{0}/podteleverseur-releases', github.repository_owner) }}
+          BLOQUE: ${{ inputs.blocage == 'bloquer' }}
+        run: |
+          set -e
+          if [ -z "$RELEASES_TOKEN" ]; then
+            echo "::error::Secret RELEASES_TOKEN absent : rien n'a été publié (voir BLOCAGE.md)."
+            exit 1
+          fi
+          git clone --depth 1 "https://x-access-token:${RELEASES_TOKEN}@github.com/${DEPOT}.git" public
+          printf '{\n  "bloque": %s\n}\n' "$BLOQUE" > public/etat.json
+          echo "Contenu publié sur $DEPOT :" && cat public/etat.json
+          cd public
+          git config user.name  "github-actions"
+          git config user.email "github-actions@github.com"
+          git add etat.json
+          git diff --cached --quiet || git commit -m "Etat"
+          git push
+
   release:
     needs: [build-windows, build-macos]
     runs-on: ubuntu-latest
     # Publication sur tag v*, OU sur « Run workflow » avec le champ version
     # rempli. Champ vide = compilation d'essai, rien n'est publié.
-    if: startsWith(github.ref, 'refs/tags/v') || inputs.version != ''
+    # Jamais pendant un blocage/déblocage, même si le champ version est rempli.
+    if: (startsWith(github.ref, 'refs/tags/v') || inputs.version != '') && inputs.blocage != 'bloquer' && inputs.blocage != 'débloquer'
     # Le jeton automatique de GitHub Actions est en LECTURE SEULE par défaut :
     # sans cette autorisation, la création de la Release échoue en 403.
     permissions:

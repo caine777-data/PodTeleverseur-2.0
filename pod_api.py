@@ -21,7 +21,7 @@ from __future__ import annotations
 __author__      = "Cédric MONNA, Philippe BAQUÉ, Michel JACOB"
 __contact__     = "support-pod@utoulouse.fr"
 __institution__ = "Université de Toulouse"
-__version__     = "0.1.0"
+__version__     = "3.0.0"
 __date__        = "2026"
 __license__     = "Usage interne — Université de Toulouse"
 
@@ -30,6 +30,7 @@ import os
 import re
 import time
 import requests
+from urllib.parse import urlsplit
 from typing import Callable, Optional
 
 try:
@@ -41,6 +42,14 @@ try:
 except ImportError:
     HAS_TOOLBELT = False
 
+# Délai des envois de fichier (POST de création, PATCH de remplacement) :
+# 30 s pour ÉTABLIR la connexion, puis 600 s maximum SANS RECEVOIR UN OCTET.
+# Ce n'est pas une durée totale : un envoi de plusieurs Go qui progresse ne
+# l'atteint jamais. Avec timeout=None, une connexion bloquée attendait
+# indéfiniment et la relance automatique (3 essais) ne se déclenchait jamais,
+# puisqu'aucune exception n'était levée.
+UPLOAD_TIMEOUT = (30, 600)
+
 
 class PodAPIError(Exception):
     """Erreur renvoyée par l'API Pod (avec code HTTP et corps de réponse)."""
@@ -49,6 +58,22 @@ class PodAPIError(Exception):
         super().__init__(message)
         self.status = status
         self.body = body
+
+
+class EnvoiAnnule(Exception):
+    """Envoi arrêté à la demande de l'utilisateur — ce n'est PAS une erreur.
+    (Repris de PodAdmin 1.9.2.)
+
+    Distincte de `PodAPIError` pour ne jamais être confondue avec une panne :
+    une annulation ne doit ni déclencher le repli sur l'envoi par morceaux, ni
+    compter parmi les « échecs » à relancer.
+
+    `a_verifier` : vrai si la vidéo a PEUT-ÊTRE été créée malgré l'arrêt
+    (attente interrompue après un 504) — la relancer créerait un doublon."""
+    def __init__(self, message: str = "Envoi interrompu à votre demande.",
+                 a_verifier: bool = False):
+        super().__init__(message)
+        self.a_verifier = a_verifier
 
 
 class PodAPI:
@@ -65,6 +90,9 @@ class PodAPI:
         # verify_ssl : vérification du certificat TLS (True en production).
         self.base_url = base_url.rstrip("/")
         self.rest = f"{self.base_url}/rest"          # racine de l'API REST (/rest)
+        # Hôte de référence : seules les URL absolues de CET hôte reçoivent le
+        # jeton (voir _abs).
+        self._netloc = urlsplit(self.base_url).netloc.lower()
         self.token = token
         self.verify_ssl = verify_ssl
         self.session = requests.Session()
@@ -76,9 +104,28 @@ class PodAPI:
     # ╚══════════════════════════════════════════════════════════════════╝
 
     def _abs(self, endpoint_or_url: str) -> str:
-        """Accepte un endpoint relatif (/videos/) OU une URL absolue de l'API."""
+        """Accepte un endpoint relatif (/videos/) OU une URL absolue de l'API.
+
+        Toute requête de la session porte le jeton (en-tête Authorization).
+        Or les URL absolues viennent souvent du SERVEUR : champ `next` de la
+        pagination, relations `owner`, `url` d'une vidéo, d'une chaîne, d'une
+        piste… Les suivre aveuglément enverrait le jeton à n'importe quel hôte
+        qu'une réponse désignerait, ou en clair si elle était en http://.
+        On n'accepte donc une URL absolue que si elle est en HTTPS et vise
+        EXACTEMENT l'hôte de l'instance configurée ; sinon PodAPIError, avant
+        toute émission."""
         s = str(endpoint_or_url)
-        return s if s.startswith("http") else f"{self.rest}{s}"
+        parties = urlsplit(s)
+        if not (parties.scheme or parties.netloc):
+            return f"{self.rest}{s}"                 # chemin relatif à l'API
+        if parties.scheme.lower() != "https":
+            raise PodAPIError(
+                f"URL refusée (schéma « {parties.scheme or '?'} », HTTPS exigé) : {s}")
+        if parties.netloc.lower() != self._netloc:
+            raise PodAPIError(
+                f"URL refusée (hôte « {parties.netloc} » différent de l'instance "
+                f"« {self._netloc} ») : {s}")
+        return s
 
     def _json(self, resp: requests.Response):
         """Transforme une réponse HTTP en données Python.
@@ -152,7 +199,11 @@ class PodAPI:
             data = self._json(r)
             if isinstance(data, dict):
                 items.extend(data.get("results", []))
-                url = data.get("next")     # URL absolue de la page suivante
+                # URL absolue de la page suivante, fournie par le serveur :
+                # validée par _abs (même hôte, HTTPS) AVANT la requête
+                # suivante, qui porterait sinon le jeton n'importe où.
+                suivante = data.get("next")
+                url = self._abs(suivante) if suivante else None
             else:
                 items.extend(data or [])
                 url = None
@@ -178,6 +229,25 @@ class PodAPI:
         """Recherche des utilisateurs → liste de dicts {username, url, ...}."""
         data = self._get("/users/", {"search": query, "limit": 25})
         return data.get("results", []) if isinstance(data, dict) else (data or [])
+
+    def find_user_by_username(self, username: str) -> dict | None:
+        """Le compte dont le nom d'utilisateur est EXACTEMENT `username`, ou None.
+
+        Filtre serveur `?username=` : la sonde verifier_identifiant.py a établi
+        qu'il renvoie exactement le compte demandé, alors que `?search=` est
+        plein texte (12 comptes pour un identifiant complet) et que
+        `?username__iexact=` est ignoré. On vérifie malgré tout l'égalité côté
+        client : si le serveur ignorait un jour le filtre, il renverrait tout
+        l'annuaire, et le premier résultat ne serait pas le bon compte. Plus
+        d'un compte exact → None (ambigu : on refuse plutôt que deviner)."""
+        cible = str(username or "").strip().lower()
+        if not cible:
+            return None
+        data = self._get("/users/", {"username": cible, "limit": 5})
+        comptes = data.get("results", []) if isinstance(data, dict) else (data or [])
+        exacts = [u for u in comptes
+                  if str(u.get("username", "")).strip().lower() == cible]
+        return exacts[0] if len(exacts) == 1 else None
 
     def get_all_users(self, max_pages: int = 80) -> list[dict]:
         """Récupère TOUS les utilisateurs en suivant la pagination de l'API."""
@@ -289,12 +359,20 @@ class PodAPI:
         progress_cb: Optional[Callable[[int, int], None]] = None,
         retry_cb: Optional[Callable[[int, int, str], None]] = None,
         max_attempts: int = 3,
+        annuler: Optional[Callable[[], bool]] = None,
     ) -> dict:
         """
         Téléverse une vidéo. Renvoie le dict de la vidéo créée (avec 'slug', 'url').
 
         progress_cb(bytes_envoyés, bytes_total) est appelé pendant l'envoi.
         N'amorce PAS l'encodage (voir launch_encoding).
+
+        annuler() : consulté à chaque bloc lu pendant l'envoi (avec
+        requests-toolbelt) et avant chaque tentative ; s'il renvoie vrai,
+        l'envoi s'arrête aussitôt (EnvoiAnnule). Le fichier n'étant pas arrivé
+        en entier, le serveur ne crée aucune vidéo. Une fois tout le fichier
+        transmis, l'attente de la réponse n'est plus interruptible (bornée par
+        UPLOAD_TIMEOUT).
 
         RELANCE AUTOMATIQUE (nouveauté) : les gros fichiers échouent parfois à
         cause d'une coupure réseau/SSL transitoire en cours d'envoi (ex.
@@ -345,6 +423,8 @@ class PodAPI:
 
         last_exc = None
         for attempt in range(1, max_attempts + 1):
+            if annuler and annuler():
+                raise EnvoiAnnule()
             # Une tentative = ouvrir le fichier, (re)construire l'encodeur, POSTer.
             f = open(file_path, "rb")
             try:
@@ -358,20 +438,24 @@ class PodAPI:
                     def _cb(monitor):
                         # Callback de progression du flux multipart : remonte le
                         # nombre d'octets déjà lus/envoyés au reste de l'appli.
+                        # Appelé par la lecture même du flux : lever ici arrête
+                        # l'envoi au bloc suivant, sans attendre la fin du fichier.
+                        if annuler and annuler():
+                            raise EnvoiAnnule()
                         if progress_cb:
                             progress_cb(monitor.bytes_read, total)
 
                     monitor = MultipartEncoderMonitor(encoder, _cb)
                     headers = {"Content-Type": monitor.content_type}
                     r = self.session.post(f"{self.rest}/videos/", data=monitor,
-                                         headers=headers, timeout=None,
+                                         headers=headers, timeout=UPLOAD_TIMEOUT,
                                          verify=self.verify_ssl)
                 else:
                     # Repli sans streaming (charge en mémoire) si toolbelt absent
                     files = {"video": (filename, f, "application/octet-stream")}
                     data = {k: v for k, v in fields if k != "video"}
                     r = self.session.post(f"{self.rest}/videos/", data=data,
-                                         files=files, timeout=None,
+                                         files=files, timeout=UPLOAD_TIMEOUT,
                                          verify=self.verify_ssl)
                 # Succès réseau : on renvoie le JSON (peut lever si code HTTP >= 400,
                 # mais ce n'est PAS une erreur transitoire → pas de relance).
@@ -435,20 +519,14 @@ class PodAPI:
     # ║  ADMINISTRATION (nouveau)                                         ║
     # ╚══════════════════════════════════════════════════════════════════╝
 
-    # ── A. Comptes — statut « équipe » (is_staff) ─────────────────────────
-    # Diagnostic : PATCH autorisé sur /rest/users/<id>/, is_staff modifiable.
+    # ── A. Comptes — lecture seule ────────────────────────────────────────
+    # set_user_staff / set_user_groups ont été retirées (3.4.2) : jamais
+    # appelées ici, elles donnaient à une appli d'enseignants le moyen de
+    # modifier les droits d'un compte. Elles relèvent de PodAdmin.
 
     def get_user(self, user_url: str) -> dict:
         """Détail d'un compte à partir de son URL (champ 'url' du compte)."""
         return self._get(user_url)
-
-    def set_user_staff(self, user_url: str, is_staff: bool) -> dict:
-        """Donne (True) ou retire (False) le statut « équipe » à un compte."""
-        return self._patch(user_url, json={"is_staff": bool(is_staff)})
-
-    def set_user_groups(self, user_url: str, group_names: list[str]) -> dict:
-        """Remplace les groupes d'accès d'un compte (champ 'groups')."""
-        return self._patch(user_url, json={"groups": list(group_names)})
 
     # ── B. Vidéos en masse — inventaire, réaffectation, nettoyage ─────────
     # Diagnostic : PATCH + DELETE autorisés, owner / is_draft modifiables.
@@ -512,6 +590,102 @@ class PodAPI:
         Les relations (owner, channel…) sont des URLs ou des listes d'URLs."""
         return self._patch(self._video_endpoint(video), json=payload)
 
+    def replace_video_file(self, video, file_path: str, *,
+                           progress_cb: Optional[Callable[[int, int], None]] = None,
+                           retry_cb: Optional[Callable[[int, int, str], None]] = None,
+                           max_retries: int = 3) -> dict:
+        """Remplace le fichier source d'une vidéo EXISTANTE par PATCH multipart streamé.
+
+        Le champ `video` d'une vidéo est modifiable (confirmé par OPTIONS) : on
+        envoie un nouveau fichier sur l'URL de détail de la vidéo. Tout le reste
+        (slug, titre, chaînes, droits, propriétaire…) est CONSERVÉ : seul le
+        média change.
+
+        ⚠️ Cette voie « PATCH direct » convient aux fichiers SOUS le seuil de
+        bascule chunké (cf. config.CHUNK_THRESHOLD_BYTES). Au-delà, la passerelle
+        nginx coupe la requête monobloc (502) : il faut passer par le
+        remplacement CHUNKÉ (PodChunkedSession.upload_video_chunked avec
+        target_slug=<slug>), géré côté application.
+
+        Robustesse identique à l'upload : envoi STREAMÉ (le fichier n'est jamais
+        chargé entièrement en mémoire) + ré-essais sur coupure réseau/SSL. Le
+        fichier est ré-ouvert à CHAQUE tentative (un flux déjà lu ne peut pas
+        être rejoué).
+
+        N'AMORCE PAS l'encodage : appeler launch_encoding(slug) ensuite.
+
+        Paramètres :
+          • video        : référence souple (dict vidéo, URL, id ou slug) ;
+          • file_path    : chemin du nouveau fichier vidéo ;
+          • progress_cb  : callback(octets_envoyés, octets_total) — progression ;
+          • retry_cb     : callback(tentative, total, message) — sur ré-essai ;
+          • max_retries  : nombre de tentatives avant abandon (défaut 3).
+        """
+        if not os.path.isfile(file_path):
+            raise PodAPIError(f"Fichier introuvable : {file_path}")
+        endpoint = self._video_endpoint(video)
+        # L'endpoint peut être relatif (/videos/<id>/) ou déjà absolu (champ
+        # `url` renvoyé par le serveur) : _abs construit l'URL complète et
+        # refuse un hôte étranger ou du http://, car ce PATCH porte le jeton.
+        target = self._abs(endpoint)
+        filename = os.path.basename(file_path)
+
+        def _one_attempt():
+            # Une tentative = ouverture fraîche du fichier + envoi streamé.
+            f = open(file_path, "rb")
+            try:
+                fields = [("video", (filename, f, "application/octet-stream"))]
+                if HAS_TOOLBELT:
+                    # Encodeur multipart streamé + moniteur de progression.
+                    encoder = MultipartEncoder(fields=fields)
+                    total = encoder.len
+
+                    def _cb(monitor):
+                        """Callback de progression du flux multipart (octets déjà envoyés)."""
+                        if progress_cb:
+                            progress_cb(monitor.bytes_read, total)
+
+                    monitor = MultipartEncoderMonitor(encoder, _cb)
+                    headers = {"Content-Type": monitor.content_type}
+                    # Délai fini (UPLOAD_TIMEOUT) : un gros PATCH peut être long,
+                    # mais tant que des octets circulent le délai de lecture ne
+                    # court pas ; une connexion figée lève Timeout, ce qui
+                    # déclenche les ré-essais ci-dessous au lieu d'attendre à
+                    # l'infini.
+                    r = self.session.patch(target, data=monitor, headers=headers,
+                                           timeout=UPLOAD_TIMEOUT, verify=self.verify_ssl)
+                else:
+                    # Repli sans requests-toolbelt : pas de progression fine,
+                    # mais l'envoi fonctionne (requests gère le multipart).
+                    files = {"video": (filename, f, "application/octet-stream")}
+                    r = self.session.patch(target, files=files,
+                                           timeout=UPLOAD_TIMEOUT, verify=self.verify_ssl)
+                return self._json(r)
+            finally:
+                f.close()
+
+        # Erreurs « transitoires » : on ré-essaie (le serveur/le réseau peut
+        # avoir hoqueté). Les erreurs HTTP 4xx/5xx « logiques » sont levées par
+        # _json et ne sont PAS ré-essayées ici.
+        transient = (
+            requests.exceptions.ConnectionError,
+            requests.exceptions.SSLError,
+            requests.exceptions.ChunkedEncodingError,
+            requests.exceptions.Timeout,
+        )
+        for attempt in range(1, max_retries + 1):
+            try:
+                return _one_attempt()
+            except transient as e:
+                if attempt < max_retries:
+                    if retry_cb:
+                        retry_cb(attempt, max_retries, str(e)[:120])
+                    time.sleep(2 * attempt)      # petit délai croissant
+                    continue
+                raise PodAPIError(
+                    f"Échec après {max_retries} tentatives (coupure réseau/SSL). "
+                    f"Dernière erreur : {e}", 0, str(e))
+
     def set_video_owner(self, video, owner_url: str,
                         additional_owner_urls: Optional[list[str]] = None) -> dict:
         """Réaffecte le propriétaire (et, en option, les co-propriétaires)."""
@@ -536,9 +710,8 @@ class PodAPI:
             payload["theme"] = list(theme_urls)
         return self.patch_video(video, payload)
 
-    def delete_video(self, video) -> bool:
-        """⚠️ Suppression définitive d'une vidéo (DELETE)."""
-        return self._delete(self._video_endpoint(video))
+    # (Pas de delete_video : le Téléverseur ne supprime aucune vidéo —
+    #  décision du 28/09/2026, voir app.py `_myvids_render_detail`.)
 
     # Aides au module Nettoyage (logique pure, testable sans réseau) ───────
 
@@ -558,6 +731,20 @@ class PodAPI:
     # Diagnostic : POST autorisé. Chaîne requiert title + themes ;
     #              thème requiert title + channel (URL) ; thèmes hiérarchiques
     #              via parentId.
+
+    def get_disciplines(self) -> list[dict]:
+        """Liste les disciplines de l'instance (reprise de PodAdmin)."""
+        data = self._get("/discipline/", {"limit": 200})
+        return data.get("results", []) if isinstance(data, dict) else (data or [])
+
+    def set_disciplines(self, video, discipline_urls: list[str]) -> dict:
+        """Remplace les disciplines d'une vidéo (réf = dict, URL, id ou slug).
+
+        ⚠️ Relation MULTIPLE : on envoie une LISTE d'URLs, même pour une seule
+        discipline. Établi par sonde dans PodAdmin — une URL nue est refusée.
+        """
+        return self._patch(self._video_endpoint(video),
+                           json={"discipline": list(discipline_urls)})
 
     def get_themes(self) -> list[dict]:
         """Liste tous les THÈMES (sous-catégories de chaînes), paginé."""

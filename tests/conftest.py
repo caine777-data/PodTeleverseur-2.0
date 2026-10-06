@@ -20,12 +20,12 @@ def app():
         import app as module_app
     except Exception as e:                        # pas d'affichage disponible
         pytest.skip(f"interface indisponible : {e}")
-    # `_first_run_wizard` est programmé 300 ms APRÈS le démarrage : fermer
-    # les fenêtres présentes à la création ne suffit pas, l'assistant surgit
-    # plus tard, au premier `update()` d'un test ultérieur — qui prenait alors
-    # « la première fenêtre secondaire » pour la sienne.
+        # `_first_run_wizard` est programmé 300 ms APRÈS le démarrage : il
+    # surgit au premier `update()` d'un test ultérieur, qui prend alors « la
+    # première fenêtre secondaire » pour la sienne.
+    # `_surveiller_blocage` aussi : il lirait le VRAI etat.json sur Internet.
     for nom in ("_auto_connect", "_verifier_maj", "_check_update",
-                "_first_run_wizard"):
+                "_first_run_wizard", "_surveiller_blocage"):
         if hasattr(module_app.App, nom):
             setattr(module_app.App, nom, lambda s, *a, **k: None)
     a = module_app.App()

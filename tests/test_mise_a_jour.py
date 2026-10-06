@@ -20,8 +20,7 @@ def _lire(nom):
 class TestSourceUniqueDeVersion:
     """⚠️ La version était définie dans l'en-tête de CHAQUE fichier. Lors de la
     publication 2.1.0, elle a été changée dans `config.py` mais pas dans
-    `app.py`, qui fait foi : l'application se serait crue éternellement en
-    2.0.0, et aurait signalé en permanence une mise à jour… vers elle-même."""
+    `app.py`, qui fait foi : l'application se serait crue éternellement en retard, et aurait signalé en permanence une mise à jour… vers elle-même."""
 
     def test_l_application_lit_la_source_unique(self):
         import __version__ as v
@@ -61,14 +60,14 @@ class TestVerification:
         """« 2.10.0 » est plus récent que « 2.9.0 » : une comparaison
         alphabétique conclurait l'inverse."""
         import maj
-        assert maj.comparer_versions("2.10.0", "2.9.0") > 0
-        assert maj.comparer_versions("2.1.0", "2.2.0") < 0
-        assert maj.comparer_versions("2.2.0", "2.2.0") == 0
+        assert maj.comparer_versions("3.10.0", "3.9.0") > 0
+        assert maj.comparer_versions("3.1.0", "3.2.0") < 0
+        assert maj.comparer_versions("3.2.0", "3.2.0") == 0
 
     def test_un_reseau_absent_ne_bloque_rien(self):
         """La vérification ne doit JAMAIS empêcher de travailler."""
         import maj
-        info = maj.etat_mise_a_jour("2.2.0", "https://exemple.invalid/v.json",
+        info = maj.etat_mise_a_jour("3.2.0", "https://exemple.invalid/v.json",
                                     timeout=1)
         assert info is None
 
@@ -779,3 +778,32 @@ class TestBoutonDeTelechargementToujoursPresent:
             "présence de l'URL")
         assert "UPDATE_FALLBACK_URL" in corps, (
             "aucune URL de repli n'est utilisée si info['url'] est vide")
+
+
+class TestInstalleurRemplaceLaV2:
+    """La v3 est destinée à remplacer la v2, depuis le même dépôt de releases.
+
+    ⚠️ Sans l'AppId de la v2, Windows ne reconnaît pas la v3 comme une mise à
+    jour : les deux coexisteraient dans la liste des programmes, avec deux
+    désinstalleurs. La chaîne doit être IDENTIQUE à l'octet près — la v2
+    s'écrit `{{…}}` et Inno Setup garde littéralement l'accolade finale
+    doublée : une version « corrigée » serait un autre identifiant."""
+
+    APPID_V2 = "AppId={{8F3A6C21-4D7B-4E2A-9C15-7B2E5D9A1C04}}"
+
+    def test_meme_appid_que_la_v2(self):
+        lignes = [l.strip() for l in _lire(".github/workflows/build.yml").split("\n")
+                  if l.strip().startswith("AppId=")]
+        assert lignes == [self.APPID_V2], f"AppId de l'installeur : {lignes}"
+
+    def test_version_de_l_installeur_lue_dans_le_code(self):
+        """Elle était écrite en dur (3.1.0) et restait fausse à chaque version."""
+        w = _lire(".github/workflows/build.yml")
+        assert "AppVersion=$ver" in w
+        assert "__version__.py" in w[w.index("Fabriquer l'installeur"):]
+
+    def test_meme_niveau_d_installation(self):
+        """L'AppId ne suffit pas : v2 et v3 doivent s'installer au même
+        niveau (profil utilisateur), sinon Inno ne voit pas l'installation
+        précédente."""
+        assert "PrivilegesRequired=lowest" in _lire(".github/workflows/build.yml")
