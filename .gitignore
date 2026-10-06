@@ -8,7 +8,7 @@ venv/
 build/
 dist/
 *.spec
-installer/
+installer_output/
 icon.iconset/
 dmg_stage/
 

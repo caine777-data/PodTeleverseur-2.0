@@ -88,94 +88,49 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      # L'icône de l'application est fournie dans assets/icon.ico.
-      # On la copie sous le nom attendu par l'étape de compilation.
-      - name: Préparer l'icône Windows
-        run: copy assets\icon.ico assets\podteleverseur.ico
-
-      - name: Compiler PodTeleverseur.exe (portable)
+      # Étape 1 : PyInstaller → PodTeleverseur.exe
+      - name: Compiler PodTeleverseur.exe (PyInstaller)
         run: |
-          $icon = (Test-Path "assets/podteleverseur.ico") ? "--icon=assets/podteleverseur.ico" : ""
           pyinstaller --onefile --windowed --name "PodTeleverseur" `
+            --icon "assets/icon.ico" `
             --version-file version.txt `
-            $icon `
             --collect-all customtkinter `
             --collect-all keyring `
             --collect-all tkinterdnd2 `
             --add-data "assets;assets" `
             app.py
 
-      # Le portable n'est plus publié : seul l'installeur figure dans la
-      # Release. L'exe reste produit ici, car Inno Setup l'embarque.
-
-      # Installe Inno Setup (compilateur d'installeurs Windows) via Chocolatey.
+      # Étape 2 : Inno Setup → PodTeleverseur-Setup.exe
       - name: Installer Inno Setup
-        run: choco install innosetup -y --no-progress
+        run: choco install innosetup --no-progress -y
 
-      # Génère le script .iss puis compile l'installeur.
-      # Installation SANS droits administrateur (dans le profil utilisateur),
-      # avec raccourcis menu Démarrer + Bureau et désinstalleur.
-      - name: Fabriquer l'installeur (Inno Setup)
+      # La version vient de __version__.py et est transmise à Inno Setup :
+      # écrite en dur dans installer.iss, elle restait figée (2.0.0) dans
+      # l'installeur et la liste des programmes Windows.
+      - name: Fabriquer l'installeur Windows (Inno Setup)
         run: |
-          # Version lue dans __version__.py : elle était écrite ici EN DUR
-          # (3.1.0) et restait fausse dans l'installeur et la liste des
-          # programmes Windows à chaque nouvelle version.
           $ver = (Select-String -Path "__version__.py" -Pattern '__version__\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
           if (-not $ver) { Write-Error "Version introuvable dans __version__.py"; exit 1 }
           Write-Host "Version de l'installeur : $ver"
-          $iss = @"
-          [Setup]
-          ; ⚠️ MÊME AppId que le Pod Téléverseur v2 : c'est lui qui fait
-          ; reconnaître la v3 comme une MISE À JOUR de la v2 (remplacement sur
-          ; place). Sans lui, les deux coexisteraient dans la liste des
-          ; programmes. Ne jamais le modifier.
-          AppId={{8F3A6C21-4D7B-4E2A-9C15-7B2E5D9A1C04}}
-          AppName=Pod Televerseur
-          AppVersion=$ver
-          AppPublisher=Universite de Toulouse
-          DefaultDirName={localappdata}\Programs\PodTeleverseur
-          DefaultGroupName=Pod Televerseur
-          PrivilegesRequired=lowest
-          OutputDir=installer
-          OutputBaseFilename=PodTeleverseur-Setup
-          Compression=lzma
-          SolidCompression=yes
-          SetupIconFile=assets\podteleverseur.ico
-          WizardStyle=modern
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$ver" "installer\installer.iss"
 
-          [Languages]
-          Name: "french"; MessagesFile: "compiler:Languages\French.isl"
-
-          [Files]
-          Source: "dist\PodTeleverseur.exe"; DestDir: "{app}"; Flags: ignoreversion
-
-          [Icons]
-          Name: "{group}\Pod Televerseur"; Filename: "{app}\PodTeleverseur.exe"
-          Name: "{group}\Desinstaller Pod Televerseur"; Filename: "{uninstallexe}"
-          Name: "{userdesktop}\Pod Televerseur"; Filename: "{app}\PodTeleverseur.exe"
-
-          [Run]
-          Filename: "{app}\PodTeleverseur.exe"; Description: "Lancer Pod Televerseur"; Flags: nowait postinstall skipifsilent
-          "@
-          # Si l'icône n'a pas été générée, on retire la ligne SetupIconFile.
-          if (-not (Test-Path "assets/podteleverseur.ico")) {
-            $iss = $iss -replace "SetupIconFile=assets\\podteleverseur.ico`r?`n", ""
-          }
-          Set-Content -Path "PodTeleverseur.iss" -Value $iss -Encoding UTF8
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "PodTeleverseur.iss"
-
-      # Renommé PENDANT la compilation : c'est le nom du FICHIER que verra
-      # la personne qui télécharge, pas le libellé de l'artefact GitHub.
+      # Publication des deux livrables Windows comme artefacts du run
+      # Seul l'INSTALLEUR est conservé : la Release ne propose plus de version
+      # portable. Renommé ici, PENDANT la compilation, pour que « Windows »
+      # figure dans le nom du FICHIER lui-même — c'est ce nom que verra la
+      # personne qui télécharge, et c'est lui qui doit être sans ambiguïté.
+      # Le préfixer dans le libellé de l'artefact GitHub n'aurait pas suffi :
+      # ce libellé n'apparaît nulle part sur la page de téléchargement finale.
       - name: Renommer l'installeur avec le nom d'OS explicite
         run: |
-          Rename-Item "installer\PodTeleverseur-Setup.exe" `
+          Rename-Item "installer_output\PodTeleverseur-Setup.exe" `
             "PodTeleverseur-Windows-Setup.exe"
 
-      - name: Publier l'installeur Windows
+      - name: Publier PodTeleverseur-Windows-Setup.exe
         uses: actions/upload-artifact@v4
         with:
           name: PodTeleverseur-Windows-Setup
-          path: installer/PodTeleverseur-Windows-Setup.exe
+          path: installer_output/PodTeleverseur-Windows-Setup.exe
 
   # ──────────────────────────────── macOS ────────────────────────────────
   build-macos:
@@ -194,46 +149,75 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      # Génère l'icône macOS (.icns) à partir du PNG master, via les outils
-      # Apple sips/iconutil (présents uniquement sur les runners macOS).
-      - name: Générer l'icône macOS (.icns)
+      # Fabrication de l'icône .icns macOS depuis le master PNG 1024×1024
+      # (sips + iconutil sont des outils natifs macOS, disponibles sur les runners)
+      - name: Fabriquer l'icône macOS (.icns)
         run: |
           mkdir -p icon.iconset
-          for s in 16 32 64 128 256 512; do
-            sips -z $s $s assets/icon_master.png --out "icon.iconset/icon_${s}x${s}.png"
-            d=$((s*2))
-            sips -z $d $d assets/icon_master.png --out "icon.iconset/icon_${s}x${s}@2x.png"
-          done
+          sips -z 16   16   assets/icon_master.png --out icon.iconset/icon_16x16.png
+          sips -z 32   32   assets/icon_master.png --out icon.iconset/icon_16x16@2x.png
+          sips -z 32   32   assets/icon_master.png --out icon.iconset/icon_32x32.png
+          sips -z 64   64   assets/icon_master.png --out icon.iconset/icon_32x32@2x.png
+          sips -z 128  128  assets/icon_master.png --out icon.iconset/icon_128x128.png
+          sips -z 256  256  assets/icon_master.png --out icon.iconset/icon_128x128@2x.png
+          sips -z 256  256  assets/icon_master.png --out icon.iconset/icon_256x256.png
+          sips -z 512  512  assets/icon_master.png --out icon.iconset/icon_256x256@2x.png
+          sips -z 512  512  assets/icon_master.png --out icon.iconset/icon_512x512.png
+          cp assets/icon_master.png icon.iconset/icon_512x512@2x.png
           iconutil -c icns icon.iconset -o assets/icon.icns
 
-      - name: Compiler PodTeleverseur.app
+      # Étape 1 : PyInstaller → PodTeleverseur.app
+      - name: Compiler PodTeleverseur.app (PyInstaller)
         run: |
-          # --onefile : build macOS léger (~20-30 Mo) au prix d'un avertissement
-          # de dépréciation PyInstaller (toléré aujourd'hui, bloquant en v7.0).
           pyinstaller --onefile --windowed --name "PodTeleverseur" \
-            --icon assets/icon.icns \
+            --icon "assets/icon.icns" \
             --collect-all customtkinter \
             --collect-all keyring \
             --collect-all tkinterdnd2 \
             --add-data "assets:assets" \
             app.py
 
-      # Le .zip de l'archive .app n'est plus fabriqué : il n'est plus publié.
-      # (Le jour où il reviendrait : utiliser `ditto`, pas `zip`, qui casse la
-      # signature et fait réapparaître « est endommagé ».)
+      # Sur Apple Silicon, macOS EXIGE que tout exécutable porte une signature
+      # valide. Sans elle, le système refuse l'application avec le message
+      # trompeur « est endommagé et ne peut pas être ouvert » — alors que le
+      # fichier est intact. Une signature « ad hoc » (-s -) suffit à lever ce
+      # blocage : elle ne certifie pas l'éditeur (il faudrait un compte Apple
+      # Developer payant), mais elle rend le paquet cohérent.
+      - name: Signer l'application (signature ad hoc)
+        run: |
+          codesign --force --deep --sign - "dist/PodTeleverseur.app"
+          codesign --verify --deep --strict --verbose=2 "dist/PodTeleverseur.app"
 
-      - name: Fabriquer le DMG (glisser-déposer vers Applications)
+      # Étape 2 : DMG (image disque avec raccourci vers /Applications)
+      - name: Fabriquer le DMG macOS
         run: |
           mkdir -p dmg_stage
-          cp -R "dist/PodTeleverseur.app" dmg_stage/ 2>/dev/null || cp -R "dist/PodTeleverseur" dmg_stage/
+          # `ditto` préserve la signature et les liens internes du paquet,
+          # ce que `cp -R` ne garantit pas.
+          ditto "dist/PodTeleverseur.app" "dmg_stage/PodTeleverseur.app"
           ln -s /Applications dmg_stage/Applications
           hdiutil create -volname "Pod Televerseur" -srcfolder dmg_stage \
             -ov -format UDZO "dist/PodTeleverseur.dmg"
 
-      - name: Renommer le .dmg avec le nom d'OS explicite
-        run: mv dist/PodTeleverseur.dmg dist/PodTeleverseur-macOS.dmg
+      # Étape 3 : ZIP de l'app (livrable historique conservé pour compatibilité)
+      - name: Compresser l'app en ZIP
+        run: |
+          cd dist
+      # Le .zip de l'archive .app n'est PLUS FABRIQUÉ : il n'est plus publié
+      # depuis la 2.2.x, et le construire pour rien allongerait le build sans
+      # raison. (Le piège `ditto` vs `zip` sur un .app reste vrai le jour où
+      # ce livrable reviendrait — ne pas utiliser `zip`, qui casse la
+      # signature et fait réapparaître « est endommagé ».)
 
-      - name: Publier le DMG macOS
+      # Publication du livrable macOS comme artefact du run
+      # Seul le .dmg est conservé : c'est l'équivalent macOS de l'installeur
+      # Windows. Renommé pour porter « macOS » dans le nom du fichier, comme
+      # pour Windows ci-dessus.
+      - name: Renommer le .dmg avec le nom d'OS explicite
+        run: |
+          mv dist/PodTeleverseur.dmg dist/PodTeleverseur-macOS.dmg
+
+      - name: Publier PodTeleverseur-macOS.dmg
         uses: actions/upload-artifact@v4
         with:
           name: PodTeleverseur-macOS-DMG

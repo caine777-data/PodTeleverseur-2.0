@@ -791,19 +791,34 @@ class TestInstalleurRemplaceLaV2:
 
     APPID_V2 = "AppId={{8F3A6C21-4D7B-4E2A-9C15-7B2E5D9A1C04}}"
 
+    # Depuis l'arrivée de la v3 dans le dépôt de la v2, l'installeur est de
+    # nouveau installer/installer.iss, celui de la v2 : mêmes noms de
+    # raccourcis, donc pas de doublon sur le Bureau ni dans le menu Démarrer.
+    ISS = "installer/installer.iss"
+
     def test_meme_appid_que_la_v2(self):
-        lignes = [l.strip() for l in _lire(".github/workflows/build.yml").split("\n")
+        lignes = [l.strip() for l in _lire(self.ISS).split("\n")
                   if l.strip().startswith("AppId=")]
         assert lignes == [self.APPID_V2], f"AppId de l'installeur : {lignes}"
 
     def test_version_de_l_installeur_lue_dans_le_code(self):
-        """Elle était écrite en dur (3.1.0) et restait fausse à chaque version."""
+        """Elle était écrite en dur (2.0.0) et restait fausse à chaque version."""
         w = _lire(".github/workflows/build.yml")
-        assert "AppVersion=$ver" in w
-        assert "__version__.py" in w[w.index("Fabriquer l'installeur"):]
+        etape = w[w.index("Fabriquer l'installeur"):]
+        etape = etape[:etape.index("- name:", 1)]
+        assert "__version__.py" in etape
+        assert '"/DMyAppVersion=$ver"' in etape
+        iss = _lire(self.ISS)
+        assert "AppVersion={#MyAppVersion}" in iss
+        assert "#ifndef MyAppVersion" in iss
 
     def test_meme_niveau_d_installation(self):
         """L'AppId ne suffit pas : v2 et v3 doivent s'installer au même
         niveau (profil utilisateur), sinon Inno ne voit pas l'installation
         précédente."""
-        assert "PrivilegesRequired=lowest" in _lire(".github/workflows/build.yml")
+        assert "PrivilegesRequired=lowest" in _lire(self.ISS)
+
+    def test_le_workflow_compile_installer_iss(self):
+        w = _lire(".github/workflows/build.yml")
+        assert '"installer\\installer.iss"' in w
+        assert "AppId=" not in w, "un second installeur est défini dans le workflow"
