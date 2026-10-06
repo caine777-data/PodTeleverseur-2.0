@@ -1,25 +1,20 @@
 """
-Source UNIQUE de la version de Pod Téléverseur.
-===============================================
-La version était définie dans l'en-tête de CHAQUE fichier. Lors de la
-publication 2.1.0, elle a été mise à jour dans `config.py` mais pas dans
-`app.py` — or c'est `app.py` qui fait foi pour l'application.
+Source UNIQUE de la version de Pod Téléverseur v3.
+==================================================
+La version était définie dans l'en-tête de CHAQUE fichier : à la reprise de
+cette v3, `app.py` annonçait 3.0.0 pendant que `config.py` disait 3.1.0 — or
+c'est `app.py` qui fait foi pour l'application.
 
-Conséquence, découverte en portant la vérification de mise à jour :
-l'application se serait crue éternellement en 2.0.0, et aurait signalé en
-permanence une « nouvelle version »… vers elle-même.
+Le même écart, en v2, aurait fait croire à l'application qu'elle était
+éternellement en retard : elle aurait signalé en permanence une mise à jour
+vers elle-même.
 
-Tous les modules importent désormais la version d'ici. Le workflow de
-compilation la lit aussi dans ce fichier : il n'y a plus qu'un seul endroit à
-modifier.
-
-Le fichier `version.txt` (métadonnées de l'exécutable Windows) reste à mettre à
-jour lors d'une publication : il ne peut pas importer de code Python. Un test
-vérifie qu'il concorde.
+Tous les modules importent désormais la version d'ici, et le workflow de
+compilation la lit dans ce fichier. `version.txt` (métadonnées de l'exécutable
+Windows) reste à mettre à jour à la main : un test vérifie la concordance.
 """
 
-__version__ = "2.3.2"
+__version__ = "3.4.2"
 
-# Décomposition (entiers), pour les métadonnées Windows :
-# (majeur, mineur, correctif, build).
+# (majeur, mineur, correctif, build) pour les métadonnées Windows.
 VERSION_TUPLE = tuple(int(x) for x in __version__.split(".")) + (0,)

@@ -50,9 +50,13 @@ ROBUSTESSE :
 from __future__ import annotations
 
 __author__      = "Cédric MONNA"
-__contact__     = "cedricmonna@gmail.com"
+# Adresse de service, pas une adresse personnelle : c'est elle que les
+# utilisateurs doivent joindre, quel que soit le mainteneur du moment.
+__contact__     = "support-pod@utoulouse.fr"
 __institution__ = "Université de Toulouse — MFCA"
-__version__     = "0.1.0"
+# Version lue dans la source unique, comme app.py et config.py : un « 0.1.0 »
+# écrit en dur ici ne suivait plus aucune livraison.
+from __version__ import __version__   # noqa: E402
 __date__        = "2026"
 __license__     = "Usage interne — Université de Toulouse"
 
@@ -93,9 +97,21 @@ GATEWAY_ERRORS = (502, 503, 504)
 class PodChunkedError(Exception):
     """Erreur du client chunké (login, envoi d'un morceau, finalisation…)."""
     def __init__(self, message: str, status: int = 0, body: str = ""):
+        """Construit l'erreur chunkée (status = code HTTP, body = corps de réponse)."""
         super().__init__(message)
         self.status = status
         self.body = body
+
+
+class EnvoiAnnule(Exception):
+    """Envoi par morceaux arrêté à la demande de l'utilisateur (pas une erreur).
+    (Repris de PodAdmin 1.9.2.)
+
+    Classe propre à ce module, qui reste indépendant de pod_api.py : l'appelant
+    attrape les deux (voir `ANNULATIONS` dans app.py)."""
+    def __init__(self, message: str = "Envoi interrompu à votre demande."):
+        super().__init__(message)
+        self.a_verifier = False     # arrêt avant finalisation : aucune vidéo créée
 
 
 class PodChunkedSession:
@@ -110,7 +126,15 @@ class PodChunkedSession:
 
     def __init__(self, base_url: str, username: str, password: str,
                  verify_ssl: bool = True):
+        """Initialise la session web du compte véhicule (URL de base, identifiant, mot de passe)."""
         self.base_url = base_url.rstrip("/")
+        # Le mot de passe du compte véhicule part dans le formulaire de login,
+        # et ce compte est partagé par tous les postes : jamais sur une adresse
+        # en clair (repris de PodAdmin). On refuse AVANT toute connexion.
+        if not self.base_url.lower().startswith("https://"):
+            raise PodChunkedError(
+                "Adresse de l'instance refusée : elle doit commencer par "
+                "https:// (le mot de passe ne doit jamais circuler en clair).")
         self.username = username
         self.password = password
         self.verify_ssl = verify_ssl
@@ -217,6 +241,8 @@ class PodChunkedSession:
         retry_cb: Optional[Callable[[int, int, str], None]] = None,
         max_retries: int = 4,
         target_slug: str = "",
+        marqueur: str = "",
+        annuler: Optional[Callable[[], bool]] = None,
     ) -> str:
         """Téléverse `file_path` en morceaux via la session web, puis finalise.
         Renvoie le SLUG de la vidéo.
@@ -230,6 +256,19 @@ class PodChunkedSession:
         progress_cb(octets_envoyés, octets_total) : suivi de progression.
         retry_cb(tentative, total, message)       : appelé avant un ré-essai.
         max_retries : nombre d'essais par morceau (2 Mo) en cas de coupure.
+
+        marqueur : identifiant unique de CET envoi (ex. « upid1a2b3c4d »),
+            ajouté au nom de fichier transmis, en CRÉATION seulement. Il permet
+            de retrouver sans ambiguïté la vidéo créée si la finalisation est
+            coupée (504) : le compte DEPOT est partagé, et deux postes peuvent
+            déposer au même moment un fichier de même nom. Ignoré en
+            remplacement : la vidéo cible est désignée par son slug.
+
+        annuler() : consulté avant chaque morceau et avant chaque nouvel essai ;
+            s'il renvoie vrai → EnvoiAnnule. L'arrêt a toujours lieu AVANT la
+            finalisation : aucune vidéo n'est créée, le téléversement partiel
+            expire seul côté serveur. La finalisation lancée, elle n'est plus
+            interruptible.
 
         N'amorce PAS l'encodage : au code appelant de lancer launch_encoding ensuite.
         """
@@ -246,6 +285,11 @@ class PodChunkedSession:
         # vrai titre est posé ensuite par PATCH ; pour un REMPLACEMENT, la vidéo
         # cible conserve son titre. Le nom transmis n'est qu'indicatif.
         filename = self._ascii_filename(os.path.basename(file_path))
+        if marqueur and not target_slug:
+            # Inséré AVANT l'extension : Pod dérive titre et slug du nom sans
+            # extension, c'est donc là que la recherche le retrouvera.
+            base, ext = os.path.splitext(filename)
+            filename = f"{base}_{self._ascii_filename(marqueur)}{ext}"
         md5 = hashlib.md5()          # calculé en un seul passage, pendant l'envoi
 
         upload_id: Optional[str] = None
@@ -253,6 +297,8 @@ class PodChunkedSession:
 
         with open(file_path, "rb") as fh:
             while True:
+                if annuler and annuler():
+                    raise EnvoiAnnule()
                 chunk = fh.read(chunk_size)
                 if not chunk:
                     break
@@ -263,14 +309,27 @@ class PodChunkedSession:
                 # Envoi du morceau, avec ré-essais isolés sur ce seul morceau.
                 resp = self._send_one_chunk(
                     chunk, start, end, total, filename, upload_id,
-                    retry_cb=retry_cb, max_retries=max_retries)
+                    retry_cb=retry_cb, max_retries=max_retries, annuler=annuler)
 
                 # La réponse fournit l'upload_id (au 1er morceau) et l'offset.
                 if isinstance(resp, dict):
                     if resp.get("upload_id"):
                         upload_id = resp["upload_id"]
                     if resp.get("offset") is not None:
-                        offset = int(resp["offset"])
+                        confirme = int(resp["offset"])
+                        # Le fichier est lu SÉQUENTIELLEMENT : le morceau suivant
+                        # commence forcément à end + 1. Si le serveur confirme
+                        # une autre position, adopter la sienne décalerait tout
+                        # le reste de l'envoi et produirait un fichier corrompu,
+                        # repéré au mieux par l'échec du md5 à la finalisation,
+                        # au pire jamais. On s'arrête net, sans envoyer la suite.
+                        if confirme != end + 1:
+                            raise PodChunkedError(
+                                f"Désaccord de position avec le serveur : il "
+                                f"confirme {confirme} octet(s) reçus, "
+                                f"{end + 1} attendus. Envoi interrompu pour "
+                                f"éviter un fichier corrompu ; relancez le dépôt.")
+                        offset = confirme
                     else:
                         offset = end + 1
                 else:
@@ -284,14 +343,17 @@ class PodChunkedSession:
                 "Aucun upload_id renvoyé par le serveur : le protocole chunké "
                 "n'a pas démarré comme attendu (à re-valider avec la sonde).")
 
-        # Finalisation → création effective de la vidéo, renvoie le slug.
+        # Dernière occasion d'arrêter : au-delà, la vidéo est créée.
+        if annuler and annuler():
+            raise EnvoiAnnule()
         # Finalisation → création (slug vide) OU remplacement (slug cible fourni).
         return self._complete(upload_id, md5.hexdigest(), target_slug=target_slug)
 
     def _send_one_chunk(self, chunk: bytes, start: int, end: int, total: int,
                         filename: str, upload_id: Optional[str], *,
                         retry_cb: Optional[Callable[[int, int, str], None]],
-                        max_retries: int) -> dict:
+                        max_retries: int,
+                        annuler: Optional[Callable[[], bool]] = None) -> dict:
         """Envoie UN morceau (POST multipart). Ré-essaie ce seul morceau en cas
         de coupure réseau/SSL. Renvoie le corps JSON de la réponse (dict)."""
         crange = f"bytes {start}-{end}/{total}"
@@ -307,6 +369,10 @@ class PodChunkedSession:
             "Accept": "application/json",
         }
         for attempt in range(1, max_retries + 1):
+            # Avant chaque nouvel essai aussi : sur une liaison qui coupe sans
+            # cesse, les pauses cumulées se comptent en dizaines de secondes.
+            if attempt > 1 and annuler and annuler():
+                raise EnvoiAnnule()
             try:
                 # multipart : le binaire dans `files`, les champs texte dans `data`.
                 data = {"csrfmiddlewaretoken": csrf}

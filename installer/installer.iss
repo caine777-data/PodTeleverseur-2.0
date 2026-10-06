@@ -12,7 +12,11 @@
 
 ; --- Variables pratiques (modifiables à chaque nouvelle version) ---
 #define MyAppName "Pod Téléverseur"
-#define MyAppVersion "2.0.0"
+; Version transmise par le workflow (/DMyAppVersion=..., lue dans __version__.py).
+; Valeur de secours pour une compilation à la main.
+#ifndef MyAppVersion
+  #define MyAppVersion "0.0.0"
+#endif
 #define MyAppPublisher "Université de Toulouse"
 #define MyAppCopyright "© Copyright 2026 Cédric MONNA"
 #define MyAppExeName "PodTeleverseur.exe"

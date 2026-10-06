@@ -27,6 +27,15 @@ CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".pod_televerseur.json")
 KEYRING_SERVICE = "PodTeleverseur-UToulouse"     # ≠ "PodAdmin-UToulouse"
 KEYRING_TOKEN_KEY = "service_token"
 
+# ── Identifiant universitaire du propriétaire des vidéos ────────────────────
+# L'enseignant SAISIT son identifiant au lieu de choisir dans l'annuaire de
+# tous les comptes. Format relevé par la sonde verifier_identifiant.py
+# (26/09/2026) : les 32 comptes d'usagers sont TOUS « 3 lettres, 4 chiffres,
+# 1 lettre » (ex. abc1234a). Les 9 autres comptes sont des comptes LOCAUX
+# d'administration (DEPOT…) : le format strict les écarte d'office, si bien
+# qu'aucun dépôt ne peut être attribué à l'un d'eux.
+IDENTIFIANT_FORMAT = r"^[a-z]{3}[0-9]{4}[a-z]$"
+
 # ── Compte VÉHICULE embarqué (session web pour le chunké des gros fichiers) ──
 # Compte LOCAL sans privilège, servant UNIQUEMENT à ouvrir la session web du
 # téléversement par morceaux. La vidéo naît à son nom puis est AUSSITÔT
@@ -42,18 +51,6 @@ VEHICLE_USERNAME = "DEPOT"
 VEHICLE_PASSWORD = "V&xehx7WB!iBWLoL%97HDjK&kg"
 
 # ── Bascule vers le téléversement par morceaux (chunked) ──────────────────
-# Seuil de bascule vers l'envoi par morceaux.
-#
-# ATTENTION : ce seuil est en OCTETS, mais ce qui fait échouer un envoi direct
-# est sa DURÉE. La passerelle (nginx) ferme la connexion au-delà d'environ une
-# minute de transfert — erreur « SSLEOFError: EOF occurred in violation of
-# protocol ». Sur une liaison montante lente, un fichier bien plus petit que
-# l'ancien seuil de 500 Mo pouvait donc être coupé.
-#
-# 150 Mo correspond à environ une minute d'envoi sur une liaison à 20 Mbit/s.
-# L'application se replie de toute façon automatiquement sur l'envoi par
-# morceaux si l'envoi direct est coupé (voir App._replier_sur_chunked), mais
-# abaisser le seuil évite de perdre du temps en tentatives inutiles.
 CHUNK_THRESHOLD_BYTES = 150 * 1024 * 1024      # 150 Mo
 CHUNK_SIZE_BYTES      = 2 * 1024 * 1024         # 2 Mo par morceau
 
@@ -62,6 +59,15 @@ CHUNK_SIZE_BYTES      = 2 * 1024 * 1024         # 2 Mo par morceau
 # Fenêtre de 30 min (gros fichiers > 2 Go).
 CHUNK_VERIFY_TIMEOUT_S  = 1800   # 30 minutes
 CHUNK_VERIFY_INTERVAL_S = 15     # secondes entre deux sondages
+
+# Après un 502 ou un 503, en revanche, l'attente est COURTE (repris de PodAdmin
+# 1.9.2). Ces codes ne disent pas « Pod est encore en train de travailler »
+# (c'est le 504) mais « Pod a répondu par une erreur, ou n'a pas traité la
+# demande ». Constaté le 25/09/2026 : un 502 est tombé 44 s après le début de
+# l'envoi, et la vidéo n'est jamais apparue. Attendre 30 min pour rien
+# bloquait tout le lot ; trois minutes suffisent à rattraper le cas où Pod
+# aurait malgré tout terminé.
+CHUNK_VERIFY_TIMEOUT_502_S = 180   # 3 minutes
 
 try:
     import keyring
@@ -91,35 +97,6 @@ def load_config() -> dict:
         except Exception:
             pass
     return cfg
-
-
-def load_theme() -> str:
-    """Renvoie le mode d'apparence enregistré : « dark » ou « light ».
-
-    Sombre par défaut, qui était le seul mode auparavant : un utilisateur qui
-    n'a jamais touché au réglage retrouve l'application telle qu'il l'a connue."""
-    valeur = str(load_config().get("theme", "dark")).lower()
-    return valeur if valeur in ("dark", "light") else "dark"
-
-
-def save_theme(mode: str) -> None:
-    """Enregistre le mode d'apparence.
-
-    Silencieux en cas d'échec : ne pas pouvoir retenir une préférence
-    d'affichage ne doit jamais empêcher de travailler."""
-    try:
-        cfg = load_config()
-        cfg["theme"] = "light" if str(mode).lower() == "light" else "dark"
-        save_config(cfg)
-    except Exception:
-        pass
-
-
-def save_config(cfg: dict) -> None:
-    """Sauvegarde la configuration. Le token n'est JAMAIS écrit dans le JSON."""
-    safe = {k: v for k, v in cfg.items() if k != "token"}
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(safe, f, indent=2, ensure_ascii=False)
 
 
 # ── Mise à jour OBLIGATOIRE : mémorisation locale du blocage confirmé ──────
@@ -204,6 +181,39 @@ def lever_blocage_local() -> None:
         save_config(cfg)
     except Exception:
         pass
+
+
+# ── Token : coffre-fort de l'OS si possible, sinon fichier local ──────────
+
+
+def load_theme() -> str:
+    """Renvoie le mode d'apparence enregistré : « dark » ou « light ».
+
+    Sombre par défaut, qui était le seul mode avant la version 3.1 : un
+    utilisateur qui n'a jamais touché au réglage retrouve l'application telle
+    qu'il l'a connue."""
+    valeur = str(load_config().get("theme", "dark")).lower()
+    return valeur if valeur in ("dark", "light") else "dark"
+
+
+def save_theme(mode: str) -> None:
+    """Enregistre le mode d'apparence.
+
+    Silencieux en cas d'échec : ne pas pouvoir retenir une préférence
+    d'affichage ne doit jamais empêcher de travailler."""
+    try:
+        cfg = load_config()
+        cfg["theme"] = "light" if str(mode).lower() == "light" else "dark"
+        save_config(cfg)
+    except Exception:
+        pass
+
+
+def save_config(cfg: dict) -> None:
+    """Sauvegarde la configuration. Le token n'est JAMAIS écrit dans le JSON."""
+    safe = {k: v for k, v in cfg.items() if k != "token"}
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(safe, f, indent=2, ensure_ascii=False)
 
 
 # ── Token : coffre-fort de l'OS si possible, sinon fichier local ──────────
@@ -305,3 +315,57 @@ UPDATE_FALLBACK_URL = "https://github.com/caine777-data/podteleverseur-releases/
 # Délai maximal accordé à la vérification. Volontairement court : elle ne doit
 # JAMAIS retarder le démarrage, ni l'empêcher si le réseau est lent ou coupé.
 UPDATE_TIMEOUT_S = 5
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  BLOCAGE À DISTANCE — interrupteur manuel, INDÉPENDANT de la mise à jour
+# ════════════════════════════════════════════════════════════════════════════
+# Repris de PodAdmin (voir BLOCAGE.md). Contrairement à la mise à jour
+# obligatoire ci-dessus (liée à un numéro de version), ce mécanisme rend
+# TOUTES les copies installées inutilisables — puis les débloque — sur simple
+# décision, sans publier de nouvelle version. Contrôlé depuis GitHub Actions
+# (workflow "Build installers" → champ "blocage"), PARAMÉTRÉ PAR DÉFAUT SUR
+# « ne rien changer » : il ne se déclenche jamais tout seul.
+#
+# Fichier SÉPARÉ (etat.json) sur le MÊME dépôt public que version.json, pour
+# ne jamais interférer avec la mise à jour ni exiger d'installation en plus.
+#
+# Mettre à "" pour désactiver complètement la vérification.
+BLOCAGE_URL = ("https://raw.githubusercontent.com/"
+               "caine777-data/podteleverseur-releases/main/etat.json")
+BLOCAGE_PERIODE_MS = 3600 * 1000     # délai entre deux vérifications (1 heure)
+BLOCAGE_TIMEOUT_S = 5                 # jamais bloquant : délai volontairement court
+
+
+# Mémorisation locale (tient hors ligne). Même principe que le verrou de mise
+# à jour obligatoire : seule une réponse RÉSEAU RÉELLE du serveur change
+# l'état mémorisé. Un réseau coupé, un dépôt injoignable ou une adresse
+# désactivée ne doivent JAMAIS déclencher, ni lever, un blocage — sans quoi
+# couper sa connexion suffirait à contourner un blocage déjà notifié.
+
+def enregistrer_blocage_distant(bloque: bool) -> None:
+    """Mémorise localement l'état de blocage confirmé par le serveur.
+
+    Appelée uniquement après une réponse réseau réelle et exploitable (voir
+    `maj.etat_blocage`) — jamais de manière spéculative."""
+    try:
+        cfg = load_config()
+        if bloque:
+            cfg["blocage_distant"] = True
+        else:
+            cfg.pop("blocage_distant", None)
+        save_config(cfg)
+    except Exception:
+        pass          # ne jamais lever depuis un enregistrement de confort
+
+
+def blocage_distant_actif() -> bool:
+    """Vrai si un blocage à distance a été mémorisé localement.
+
+    Vérifié EN TOUT PREMIER au démarrage, avant tout accès réseau : un
+    blocage déjà confirmé doit s'appliquer sans attendre la vérification
+    périodique, sinon l'application resterait utilisable pendant ce délai."""
+    try:
+        return load_config().get("blocage_distant") is True
+    except Exception:
+        return False

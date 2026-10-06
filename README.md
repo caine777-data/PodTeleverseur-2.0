@@ -1,239 +1,288 @@
-# Pod Téléverseur — Université de Toulouse
+# Pod Téléverseur
 
-Application de bureau pour **téléverser des vidéos par lot** vers l'instance
-Esup-Pod de l'Université de Toulouse (`videos.utoulouse.fr`).
+Application de bureau (Windows / macOS) destinée aux enseignants de l'Université
+de Toulouse pour **déposer des vidéos par lot** sur l'instance Esup-Pod
+`videos.utoulouse.fr` et **gérer leurs propres vidéos**, sans passer par
+l'interface web.
 
-Version légère dérivée de **PodAdmin** : seuls le téléversement, la
-configuration et le journal sont conservés ; tous les modules d'administration
-ont été retirés. Destinée aux enseignants et au support.
+Version légère dérivée de **PodAdmin** : les modules d'administration (groupes
+d'accès, réaffectation, inventaire, modération…) ont été retirés.
 
-## Fonctionnalités
+---
 
-- **Téléversement par lot** : ajout de fichiers, d'un dossier entier
-  (scan récursif) ou **glisser-déposer** de fichiers et dossiers.
-- **Titres éditables** avant l'envoi, état par vidéo, barre de progression
-  (fichier courant + lot global), upload streamé (gros fichiers).
-- **Réglages communs au lot** : type de vidéo, visibilité
-  (Brouillon/Privé ou Public), propriétaires additionnels, et case
-  **« Lancer l'encodage après le téléversement »** (cochée par défaut).
-- **Assistant de première utilisation** : au tout premier lancement (aucun
-  token enregistré), une fenêtre guide l'utilisateur en deux étapes — coller
-  le token (adresse pré-remplie) puis choisir le compte déposant — avant
-  d'arriver sur l'onglet Téléversement.
-- **Configuration** : connexion à l'instance (URL + token), choix du
-  compte déposant (propriétaire des vidéos), bouton « Oublier le token ».
-- **Choix guidé du compte déposant** : à la première connexion, le compte
-  est détecté automatiquement s'il est certain, sinon une fenêtre invite à
-  le choisir explicitement (modifiable ensuite dans Configuration).
-- **Journal** horodaté des opérations.
-- **Aide** : fenêtre expliquant chaque fonction (pour les enseignants).
-- **À propos** : fenêtre d'information (version, auteurs, contact).
+## Fonctions
 
-## Sécurité du token
+- **📂 Téléversement** — dépôt par lot (glisser-déposer), titres éditables,
+  propriétaires additionnels communs, lancement automatique de l'encodage.
+  Les gros fichiers (> 150 Mo) passent par le téléversement **par morceaux**
+  (chunké) pour absorber les coupures de la passerelle.
+- **🎞️ Mes vidéos** — gestion des vidéos **du propriétaire sélectionné**
+  (uniquement les siennes) :
+  - filtres (texte, statut, encodage, chaîne, type) ;
+  - renommer, changer le **statut** (Brouillon / Public / Restreint) ;
+  - changer le **type**, gérer les **co-propriétaires** ;
+  - **sous-titres** (ajout / suppression de pistes `.vtt` / `.srt`) ;
+  - **Remplacer** le fichier source puis **ré-encoder** (le titre, les chaînes
+    et les droits sont conservés) ;
+  - **supprimer** une vidéo ;
+  - modification du **type en masse** sur les vidéos affichées.
 
-Le token est stocké dans le **coffre-fort de l'OS** (Windows Credential
-Manager / macOS Keychain) via `keyring`, avec repli sur un fichier local à
-permissions restreintes si le coffre-fort est indisponible. **Toujours par
-poste, jamais dans l'exécutable.** Clé dédiée `PodTeleverseur-UToulouse`,
-distincte de celle de PodAdmin : les deux applications cohabitent sans
-conflit.
+  L'onglet **se rafraîchit automatiquement** quand on change de propriétaire
+  (dans l'onglet Téléversement).
+- **⚙️ Configuration** — connexion à l'instance (jeton) + choix du compte
+  déposant.
+- **📋 Journal** — historique horodaté des opérations.
 
-## Lancer en développement
+---
+
+## Installation (utilisateurs)
+
+Télécharger le livrable adapté depuis la page **Releases** du dépôt :
+
+| Système  | Fichier                          | Usage                                   |
+|----------|----------------------------------|-----------------------------------------|
+| Windows  | `PodTeleverseur-Setup.exe`       | Installeur (menu Démarrer + désinstalleur) |
+| Windows  | `PodTeleverseur.exe`             | Version portable (sans installation)    |
+| macOS    | `PodTeleverseur.dmg`             | Glisser l'app dans Applications         |
+| macOS    | `PodTeleverseur-macOS.zip`       | Archive `.app`                          |
+
+**macOS — premier lancement** : l'app n'étant pas signée, Gatekeeper la bloque.
+Faire un **clic droit → Ouvrir**, ou Réglages Système → Confidentialité et
+sécurité → « Ouvrir quand même », ou en Terminal : `xattr -cr /Applications/PodTeleverseur.app`.
+Les runners macOS de GitHub étant Apple Silicon, l'app est **arm64**.
+
+---
+
+## Compilation (mainteneur)
+
+Les exécutables sont fabriqués automatiquement par **GitHub Actions**
+(`.github/workflows/build.yml`), pour Windows et macOS en un seul run.
+
+- **Build manuel** : onglet *Actions* → *Build installers* → *Run workflow*.
+  Récupérer les fichiers dans les *artifacts* du run.
+- **Release** : pousser un tag `v*` (ex. `v3.0.0`) crée une *Release* GitHub
+  avec tous les livrables attachés.
+
+  ```bash
+  git tag v3.0.0
+  git push origin v3.0.0
+  ```
+
+> ⚠️ Le dossier caché `.github/` est souvent oublié lors d'un premier envoi.
+> Vérifier qu'il est bien présent dans le dépôt (sinon le workflow n'existe pas).
+
+### Compilation locale (optionnelle)
 
 ```bash
-pip install -r requirements.txt
-python app.py
-```
-
-## Compiler
-
-### En local (PyInstaller)
-
-Windows (PowerShell) :
-
-```powershell
-python -m PyInstaller --onefile --windowed --name "PodTeleverseur" `
-  --icon "assets/icon.ico" --version-file version.txt `
-  --collect-all customtkinter --collect-all keyring --collect-all tkinterdnd2 `
+python -m pip install -r requirements.txt pyinstaller
+# Windows :
+python -m PyInstaller --onefile --windowed --name PodTeleverseur ^
+  --collect-all customtkinter --collect-all keyring --collect-all tkinterdnd2 ^
   --add-data "assets;assets" app.py
+# macOS/Linux : remplacer "assets;assets" par "assets:assets"
 ```
 
-macOS / Linux (séparateur `:` au lieu de `;`) :
+---
 
-```bash
-python -m PyInstaller --onefile --windowed --name "PodTeleverseur" \
-  --icon "assets/icon.icns" \
-  --collect-all customtkinter --collect-all keyring --collect-all tkinterdnd2 \
-  --add-data "assets:assets" app.py
-```
+## Architecture (fichiers)
 
-### Via GitHub Actions (recommandé)
+| Fichier                  | Rôle                                                        |
+|--------------------------|-------------------------------------------------------------|
+| `app.py`                 | Interface graphique (CustomTkinter) + logique des onglets   |
+| `pod_api.py`             | Client de l'API REST Esup-Pod (jeton Bearer)                |
+| `pod_chunked.py`         | Téléversement / remplacement **par morceaux** (session web) |
+| `config.py`              | Configuration + stockage sécurisé du jeton (keyring OS)     |
+| `verifier_mes_videos.py` | Sonde de diagnostic (filtre propriétaire côté serveur)      |
+| `assets/`                | Logo Université de Toulouse + icônes                        |
 
-Le workflow `.github/workflows/build.yml` compile et fabrique les **installeurs**
-pour Windows et macOS :
-- bouton **« Run workflow »** (onglet Actions) pour un build manuel ;
-- push d'un **tag `v*`** (ex. `v1.0.0`) pour créer une **Release** avec les
-  installeurs attachés.
+---
 
-Artefacts produits :
-- `PodTeleverseur-Setup.exe` — installeur Windows (Inno Setup) ;
-- `PodTeleverseur.exe` — version portable Windows (sans installation) ;
-- `PodTeleverseur.dmg` — image disque macOS (glisser l'appli dans Applications).
+## Sécurité — compte véhicule DEPOT
 
-> ⚠️ Le dossier caché `.github` est souvent oublié à l'envoi : vérifier sa
-> présence dans le dépôt (ou créer le fichier directement sur GitHub).
+Le téléversement par morceaux (gros fichiers, et le **Remplacer**) exige une
+**session web**. L'application embarque pour cela un compte véhicule **DEPOT**
+(identifiants dans `config.py`). Ce compte a le **statut d'équipe** (is_staff),
+ce qui lui permet de créer une vidéo puis de la réattribuer au bon propriétaire,
+et de finaliser un remplacement de fichier sur la vidéo d'un enseignant.
 
-## Installation (utilisateur final)
+> ⚠️ **Conséquence** : les identifiants DEPOT étant embarqués dans l'exécutable
+> distribué, ils sont techniquement **extractibles**. Comme DEPOT est is_staff,
+> quiconque récupère l'exe obtient une session web disposant des droits d'équipe
+> sur l'instance. Le dépôt de ce code doit donc rester **privé** et la diffusion
+> de l'exécutable maîtrisée (usage interne, enseignants de confiance).
 
-### Windows
-Double-cliquez sur **`PodTeleverseur-Setup.exe`** et suivez l'assistant. L'appli
-s'installe **sans droits administrateur** (dans le profil de l'utilisateur) et
-ajoute les raccourcis menu Démarrer + Bureau. Désinstallation via « Ajout/
-Suppression de programmes ».
+Le **jeton API** de l'utilisateur, lui, n'est jamais embarqué : il est stocké
+dans le coffre-fort de l'OS (Windows Credential Manager / macOS Keychain), par
+poste, avec repli fichier à permissions restreintes.
 
-### macOS
-Ouvrez **`PodTeleverseur.dmg`**, puis glissez **Pod Téléverseur** dans le
-dossier **Applications**.
-
-### ⚠️ Avertissements de sécurité (applications non signées)
-Les installeurs ne sont pas signés numériquement : au premier lancement, le
-système affiche un avertissement. C'est normal et contournable :
-- **Windows (SmartScreen)** : « Windows a protégé votre ordinateur » →
-  « Informations complémentaires » → « Exécuter quand même ».
-- **macOS (Gatekeeper)** : clic droit sur l'appli → « Ouvrir », ou Réglages
-  Système → Confidentialité et sécurité → « Ouvrir quand même ». En dernier
-  recours : `xattr -cr "/Applications/PodTeleverseur.app"`.
-
-Pour supprimer ces avertissements, il faut **signer le code** : certificat
-Authenticode (Windows) et compte Apple Developer + notarisation (macOS),
-généralement disponibles via le service informatique de l'université.
-
-> Note macOS : les runners GitHub sont des Mac **Apple Silicon** → l'appli est
-> en arm64 (ne tourne pas sur un Mac Intel sans build dédié).
+---
 
 ## Diagnostic
 
-`verifier.py` teste le token et liste les champs requis de l'API (méthode
-OPTIONS). Le dossier `scripts/` contient des commandes curl de référence
-(commentées en français).
+Avant d'ajouter ou de fiabiliser une fonction, valider le protocole API par
+sonde plutôt que supposer. `verifier_mes_videos.py` (lecture seule) teste si
+l'instance sait filtrer les vidéos par propriétaire côté serveur (`?owner=`),
+ce qui permettrait à l'onglet « Mes vidéos » d'éviter un scan complet.
 
-## Arborescence
-
-```
-pod-televerseur/
-├── app.py                       # Interface (CustomTkinter) — Téléversement, Config, Journal, À propos
-├── pod_api.py                   # Client API REST Esup-Pod
-├── config.py                    # Config + stockage chiffré du token
-├── verifier.py                  # Diagnostic API
-├── requirements.txt
-├── version.txt                  # Métadonnées Windows de l'exe
-├── assets/
-│   ├── logo_ut.png
-│   ├── icon.ico            # icône Windows (exe + installeur)
-│   └── icon_master.png     # source de l'icône macOS (.icns généré au build)
-├── scripts/                     # Commandes curl de référence
-├── installer/installer.iss      # Script de l'installeur Windows (Inno Setup)
-└── .github/workflows/build.yml  # Compilation Windows + macOS
+```bash
+python verifier_mes_videos.py
 ```
 
 ---
 
-Développé par **Cédric MONNA**, **Philippe BAQUÉ** et **Michel JACOB** — Université de Toulouse — `support-pod@utoulouse.fr`
-Usage interne, non redistribuable.
-
----
-
-## Droits
-
-© Copyright 2026 Cédric MONNA
-
-Développé pour l'Université de Toulouse, avec Philippe BAQUÉ et Michel JACOB.
-
-**Tous droits réservés.** La réutilisation, la diffusion ou l'adaptation de cet
-outil, en tout ou partie, sont soumises à l'autorisation préalable de l'auteur.
-
-Contact : support-pod@utoulouse.fr
+*Développé par Cédric MONNA (support-pod@utoulouse.fr) — service MFCA,
+Université de Toulouse. Usage interne, non redistribuable.*
 
 ---
 
 ## Apparence — module partagé `theme.py`
 
 `theme.py` est **commun à PodAdmin, au Téléverseur v2 et au Téléverseur v3**.
-Une correction de palette faite ici bénéficie aux trois outils ; les faire
-diverger reviendrait à corriger trois fois le même défaut.
+Les faire diverger reviendrait à corriger trois fois le même défaut — et à en
+oublier deux. Une correction de palette faite ici bénéficie aux trois outils.
 
 ⚠️ **Toute couleur est un COUPLE `(clair, sombre)`.** Une teinte écrite seule
-s'applique telle quelle aux deux thèmes. L'application en comptait **80** avant
-le portage. Un test l'interdit désormais.
+s'applique telle quelle aux deux thèmes. L'application en comptait **124** avant
+le portage : chacune serait devenue illisible dès l'ouverture du mode clair.
+Un test l'interdit désormais.
 
-⚠️ **Le contraste se calcule**, il ne s'apprécie pas à l'œil : toutes les
-teintes de texte atteignent 4,5:1 (WCAG 2.1 AA) sur l'ensemble de l'échelle de
-surfaces, dans les deux modes.
+⚠️ **Le contraste se calcule, il ne s'apprécie pas à l'œil.** Toutes les teintes
+de texte atteignent 4,5:1 (WCAG 2.1 AA) sur l'ensemble de l'échelle de surfaces,
+dans les deux modes ; `theme.verifier_palette()` le contrôle et un test l'appelle.
 
 ## Mode clair / sombre
 
-Bouton de bascule en pied de barre latérale, choix **enregistré** — un
-enseignant qui préfère le mode clair ne doit pas le redemander à chaque dépôt.
-Sombre reste le défaut.
-
-## Messages d'erreur
-
-⚠️ Une exception ne s'affiche jamais telle quelle. `message_utilisateur(e)`
-traduit les cas connus en phrase actionnable ; `self._signaler(widget, e,
-contexte)` affiche **et** journalise en un seul appel, pour qu'on ne puisse
-plus faire l'un sans l'autre. Le détail technique part au **Journal**.
-
-## Périmètre
-
-⚠️ La v2 n'a **pas** l'onglet « Mes vidéos », et c'est délibéré : on ne
-souhaite pas, dans un premier temps, que les enseignants puissent relancer un
-ré-encodage. Un test le vérifie — son apparition serait une régression de
-périmètre.
+L'application était figée en mode sombre. Un bouton de bascule figure en pied de
+barre latérale, et le choix est **enregistré** : un enseignant qui préfère le
+mode clair ne doit pas le redemander à chaque dépôt. Sombre reste le défaut —
+c'était le seul mode avant la 3.1.
 
 ## Tests
+
+Premiers tests de cette application (elle n'en avait aucun) :
 
 ```bash
 python -m pytest tests/ -q
 ```
 
-## Mises à jour
+Ils couvrent la palette, la bascule de thème, la structure des onglets et
+l'absence de superposition de widgets. ⚠️ Pour ce dernier point, **ne pas
+filtrer sur `winfo_class()`** : il renvoie « Frame » pour tous les widgets
+CustomTkinter, `CTkOptionMenu` compris — un filtre sur cette base ne compare
+plus rien et laisse passer le défaut qu'il devait détecter.
 
-L'application consulte au démarrage — en arrière-plan — le fichier
-`version.json` du dépôt public `podteleverseur-releases`. Deux réactions
-possibles selon la publication :
 
-- **Normale** (par défaut) : si une version plus récente existe, un bandeau
-  apparaît en pied de barre latérale avec un bouton « Télécharger ». Ne
-  retarde ni n'empêche jamais l'ouverture.
-- **Obligatoire** (`obligatoire: true` dans `version.json`) : une fenêtre
-  modale empêche d'utiliser l'application tant que la personne n'a pas mis à
-  jour. Message fixe et neutre, sans raison (`MESSAGE_BLOCAGE` dans
-  `app.py`) ; deux seules issues : télécharger la mise à jour ou quitter —
-  la croix et Alt+F4 quittent aussi. ⚠️ Jamais de boucle qui reprend le
-  focus : lors d'un test réel, elle avait rendu Alt+F4 inopérant et obligé à
-  tuer le processus.
+---
 
-  ⚠️ **Ce blocage, une fois confirmé par le serveur, est mémorisé localement**
-  (voir `config.enregistrer_blocage_confirme` / `blocage_local_actif`) : il
-  reste actif aux lancements suivants MÊME SANS RÉSEAU, pour empêcher qu'une
-  personne notifiée une fois contourne le blocage en coupant sa connexion.
-  Un réseau absent ne peut en revanche jamais DÉCLENCHER un nouveau blocage —
-  seulement le maintenir une fois qu'il a été confirmé au moins une fois. Le
-  verrou se lève automatiquement dès qu'une version qui n'est plus concernée
-  est installée.
+## Mises à jour (depuis la 3.2.0)
 
-  ⚠️ Le bouton « Télécharger la mise à jour » de cette fenêtre est **toujours
-  présent**, jamais conditionnel à la présence d'une URL dans `version.json` :
-  si elle venait à manquer (fichier corrompu, modifié à la main), le bouton
-  retombe sur la page générique des Releases (`config.UPDATE_FALLBACK_URL`).
-  Un blocage sans la moindre issue n'est jamais acceptable.
+Même dispositif que Pod Téléverseur v2, pour que cette version puisse le
+remplacer sans changer les habitudes :
+
+- **Bandeau** en pied de barre latérale quand une version plus récente existe.
+- **Mise à jour obligatoire** (`obligatoire: true` dans `version.json`) : une
+  fenêtre modale empêche d'utiliser l'application. Message fixe et neutre
+  (`MESSAGE_BLOCAGE`), sans raison ; deux issues seulement — télécharger ou
+  quitter (la croix et Alt+F4 quittent aussi).
+- **Verrou local** : un blocage confirmé par le serveur reste actif même sans
+  réseau, pour qu'on ne puisse pas le contourner en coupant la connexion. Il ne
+  vaut que pour la version qui l'a déclenché.
+
+⚠️ **La version n'est définie qu'à UN endroit : `__version__.py`.** À la
+reprise de cette v3, `app.py` annonçait 3.0.0 et `config.py` 3.1.0 — c'est
+`app.py` qui fait foi, l'application se serait donc crue en retard en
+permanence. `version.txt` doit concorder : un test le vérifie.
 
 La mise en place (dépôt public, jeton, secret) et la procédure de publication
-obligatoire sont décrites dans **`MISE_EN_PLACE_MISES_A_JOUR.md`**.
+obligatoire sont décrites dans **`MISE_EN_PLACE_MISES_A_JOUR.md`**. Le
+**blocage à distance** (« bloquer » / « débloquer » dans Run workflow, repris
+de PodAdmin) est décrit dans **`BLOCAGE.md`**.
 
-⚠️ **La version n'est définie qu'à UN endroit : `__version__.py`.** Elle était
-auparavant écrite dans l'en-tête de chaque fichier ; en 2.1.0, elle a été
-modifiée dans `config.py` mais pas dans `app.py`, qui fait foi — l'application
-se serait crue éternellement en 2.0.0 et aurait signalé en permanence une mise à
-jour vers elle-même. `version.txt` (exécutable Windows) doit concorder : un test
-le vérifie.
+## Onglet « Mes vidéos »
+
+N'affiche **que** les vidéos du propriétaire sélectionné. Le filtrage est
+demandé au serveur (paramètre `owner`) **et refait systématiquement côté
+client** : si l'instance ignorait ce paramètre, elle renverrait toutes les
+vidéos de la plateforme. ⚠️ Ne jamais supprimer le filtre client
+(`TestFiltreProprietaire`). Depuis la 3.3.3, les vidéos dont le compte est
+**co-propriétaire** y entrent aussi (repère 👥). Pod réserve la suppression au
+propriétaire : le bouton est masqué sur ces vidéos, et `_myvids_delete` refuse
+aussi par sécurité.
+
+⚠️ Le filtre serveur `owner=` ne renvoie que les vidéos POSSÉDÉES. Les vidéos
+en co-propriété exigent le filtre `additional_owners`, ou à défaut une lecture
+complète — jamais le seul filtre `owner`.
+
+⚠️ Défaut corrigé en 3.3.3 : sur une URL de compte finissant par « / » (la
+forme de l'API), l'id numérique n'était jamais extrait, et une vidéo dont
+`owner` est l'URL n'était pas reconnue. Les tests passent désormais par la
+vraie fonction `_myvids_owner_ids`, et non par un ensemble fourni à la main.
+
+⚠️ **Le filtre serveur est facultatif.** Le format accepté pour `owner` varie
+d'une instance à l'autre : sur videos.utoulouse.fr, `owner=<URL>` est refusé
+(« Sélectionnez un choix valide »). Une version antérieure ne tentait que cette
+forme, et son échec vidait tout l'onglet. L'application essaie désormais l'id
+numérique, l'URL, puis `owner__username`, et se rabat sur une lecture complète
+— toujours re-filtrée côté client (`TestFiltreServeurFacultatif`).
+
+
+## Discipline au téléversement (depuis la 3.3.0)
+
+Réglage commun au lot, à côté du Type, comme dans PodAdmin. **Facultatif** :
+l'imposer pousserait à choisir au hasard. Rattachée après la création de chaque
+vidéo, par PATCH avec une **liste** d'URLs ; un échec ne fait pas échouer le
+dépôt. Mémorisée pour la relance des échecs.
+
+⚠️ Placée en ligne 1 : la ligne 2, colonnes 2-3, porte déjà « Propriétaires
+additionnels », et Tk superpose sans prévenir deux widgets sur la même cellule.
+
+
+## Couleurs (depuis la 3.3.1)
+
+Mêmes règles que PodAdmin : utilitaires en gris (`C_NEUTRE`) avec texte sombre
+en mode clair (`T_SUR_NEUTRE` — du blanc sur ce gris donne 2,44:1, illisible),
+action de masse en orange, une seule action principale colorée par écran,
+menus et listes en `STYLE_CHAMP` / `STYLE_ZONE`. Aucune teinte seule : un test
+(`TestHierarchieDesCouleurs`) l'interdit.
+
+
+## Remplacement de la v2 (depuis la 3.3.2)
+
+La v3 publie dans le **même dépôt de releases** que la v2
+(`podteleverseur-releases`) et son installeur porte le **même AppId**
+Inno Setup : installée sur un poste en v2, elle la remplace sur place.
+
+⚠️ Conséquence de ce dépôt commun : publier une v3 y réécrit `version.json`
+en 3.x — tous les postes en v2 reçoivent alors le bandeau et téléchargent la
+v3, avec l'onglet « Mes vidéos ». Ne publier la v3 qu'au moment de la bascule ;
+cocher « obligatoire » bloquerait tous les postes encore en v2.
+
+
+## Sélection multiple dans « Mes vidéos » (depuis la 3.4.0)
+
+Ctrl+clic, Maj+clic (plage) et « ☑ Tout sélectionner ». Le panneau de lot a
+la même présentation que celui de PodAdmin (`_myvids_render_lot`, teintes
+`COULEURS_LOT`) : liste des vidéos concernées, boutons Mettre en brouillon /
+Rendre public / Rendre restreint / Affecter à une chaîne (ajout ou
+remplacement, calcul `calculer_chaines_themes` repris de PodAdmin), Classement
+(type, disciplines), « 🛑 Interrompre le traitement », « ✖ Annuler la
+sélection ». Chaque action demande confirmation. Absents par rapport à
+PodAdmin : « Restreindre au groupe… » (pas de groupes d'accès) et la zone de
+suppression (retirée en 3.4.2).
+
+- ⚠️ L'interruption est **propre** : la vidéo en cours est terminée, le lot
+  s'arrête avant la suivante (`myvids_lot_interrompu`).
+- ⚠️ Chaque vidéo est traitée **indépendamment** : un échec n'arrête pas le lot,
+  le bilan compte réussites et échecs (détail au Journal).
+- ⚠️ CTkButton agit au **relâchement** du clic : les liaisons
+  `<Control-ButtonRelease-1>` / `<Shift-ButtonRelease-1>` doivent renvoyer
+  "break", sinon un Ctrl+clic déclenche aussi une sélection simple.
+
+Sur une vidéo seule : « 🏷️ Disciplines… » à côté du type (section
+Classement) et « 🗂 Chaînes et thèmes… » dans Relations. Les sélecteurs
+`ChannelPicker` et `ChainesThemesPicker` sont repris de PodAdmin à l'identique.
+
+
+La barre « Modifier en masse » a été retirée en 3.4.1 (comme dans PodAdmin) :
+le type d'un lot passe par le panneau de sélection, bouton « Appliquer le type
+à N vidéos » puis confirmation.

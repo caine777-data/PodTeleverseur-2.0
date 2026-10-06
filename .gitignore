@@ -8,17 +8,21 @@ venv/
 build/
 dist/
 *.spec
+installer_output/
+icon.iconset/
+dmg_stage/
 
 # Secrets — NE JAMAIS committer
 .env
 *token*
-.podadmin*
 .pod_televerseur*
 scripts/.env
-
-# Exports générés
-inventaire_pod_*.xlsx
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Rapports des sondes : ils contiennent un identifiant réel, jamais dans le dépôt.
+rapport_*.txt
+# Jeton déposé pour la sonde : jamais dans le dépôt (normalement supprimé à la lecture).
+jeton.txt
