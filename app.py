@@ -2051,7 +2051,9 @@ class App(_AppBase):
         if st == "Brouillon":
             vids = [v for v in vids if v.get("is_draft")]
         elif st == "Public":
-            vids = [v for v in vids if not v.get("is_draft")]
+            # Les trois statuts sont exclusifs (voir STATUTS) : une vidéo
+            # restreinte n'est pas publique, même si elle n'est pas brouillon.
+            vids = [v for v in vids if not v.get("is_draft") and not v.get("is_restricted")]
         elif st == "Restreinte":
             vids = [v for v in vids if v.get("is_restricted")]
         # Filtre encodage
