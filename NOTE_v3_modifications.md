@@ -214,3 +214,22 @@ Repris de PodAdmin 1.13.0.
 
 Tests : `tests/test_detail_rapide.py` (12 tests, 13 mutations dont une
 équivalente), `tests/test_conservation_builds.py`.
+
+## 3.5.0 : « Mes vidéos » en tableau, filtres en pastilles
+
+Repris de PodAdmin 1.12 et 1.13 ; maquette validée par Cédric le 2026-10-23.
+
+- **Tableau natif** (`ttk.Treeview`, `myvids_tree`) à la place d'un bouton par
+  vidéo : colonnes statut (🌐 / 🔒 / 📝), titre, rôle (👥 = co-propriété), date,
+  encodée. Plus de plafond à 300 lignes. Tri d'un clic sur « Titre » ou
+  « Ajoutée le » (un second clic inverse). Flèches haut et bas.
+- **Recherche pleine largeur et filtres en pastilles** (`tableau.py` :
+  `PastilleFiltre`, `RangeeFluide`) : Statut, Encodage, Chaîne, Type, et
+  **Rôle** (nouveau : propriétaire ou co-propriétaire). Pas de pastille
+  « Anomalies » (outil d'administrateur, décision de Cédric).
+- **Compteur** « n vidéo(s) sur N · k filtres actifs » et lien « Effacer les
+  filtres ».
+- Mesure sur 600 vidéos : filtrage de 8,1 s (3.4.4) à 0,11 s.
+- Corrigé à part : le filtre « Public » incluait les vidéos restreintes.
+
+Tests : `tests/test_tableau.py` (20 tests, 25 mutations), `tests/test_filtres.py`.

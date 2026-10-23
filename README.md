@@ -91,6 +91,7 @@ python -m PyInstaller --onefile --windowed --name PodTeleverseur ^
 | `app.py`                 | Interface graphique (CustomTkinter) + logique des onglets   |
 | `pod_api.py`             | Client de l'API REST Esup-Pod (jeton Bearer)                |
 | `pod_chunked.py`         | Téléversement / remplacement **par morceaux** (session web) |
+| `tableau.py`             | Tableau natif stylé, filtres en pastilles (repris de PodAdmin) |
 | `config.py`              | Configuration + stockage sécurisé du jeton (keyring OS)     |
 | `verifier_mes_videos.py` | Sonde de diagnostic (filtre propriétaire côté serveur)      |
 | `assets/`                | Logo Université de Toulouse + icônes                        |
@@ -224,6 +225,20 @@ d'une instance à l'autre : sur videos.utoulouse.fr, `owner=<URL>` est refusé
 forme, et son échec vidait tout l'onglet. L'application essaie désormais l'id
 numérique, l'URL, puis `owner__username`, et se rabat sur une lecture complète
 — toujours re-filtrée côté client (`TestFiltreServeurFacultatif`).
+
+**Tableau natif et pastilles (depuis la 3.5.0, repris de PodAdmin 1.12/1.13).**
+La liste est un `ttk.Treeview` (`myvids_tree`, colonnes `ENTETES_MES_VIDEOS`) :
+plus de plafond à 300 lignes, tri par les en-têtes Titre et Ajoutée le
+(`_myvids_tri`), flèches haut et bas. Les filtres sont des `PastilleFiltre`
+(module `tableau.py`) dans une `RangeeFluide` qui passe à la ligne ; ils gardent
+l'interface d'un menu déroulant (get, set, values), le filtrage n'a pas changé.
+Pastille « Rôle » : propriétaire ou co-propriétaire.
+
+- ⚠️ Un Treeview n'a que des couleurs simples : `_basculer_theme` appelle
+  `styler_tableaux` à chaque changement de mode.
+- ⚠️ Sélection native coupée (`selectmode="none"`) : les teintes « courante »
+  et « multi » sont des étiquettes posées par `_myvids_teinter_lignes`, une
+  seule par ligne.
 
 
 ## Discipline au téléversement (depuis la 3.3.0)

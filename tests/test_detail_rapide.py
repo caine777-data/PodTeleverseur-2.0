@@ -161,30 +161,25 @@ class TestMessagesEtSousTitres:
 
 
 class TestListeRecoloree:
+    """Depuis la 3.5.0, la liste est un tableau natif : un clic ne fait que
+    changer l'étiquette de teinte des lignes."""
 
-    def test_un_clic_ne_reconstruit_pas_la_liste(self, mes_videos):
+    def test_un_clic_ne_reconstruit_pas_la_liste(self, mes_videos, monkeypatch):
         app = mes_videos
-        avant = {s: id(l[0]) for s, l in app._myvids_lignes.items()}
+        reconstructions = []
+        monkeypatch.setattr(app, "_render_myvids_list", lambda: reconstructions.append(1))
         _choisir(app, 1)
         _choisir(app, 2)
-        assert {s: id(l[0]) for s, l in app._myvids_lignes.items()} == avant
+        assert reconstructions == []
 
     def test_teintes_apres_clics(self, mes_videos):
-        import app as module_app
         app = mes_videos
         _choisir(app, 0)
         _choisir(app, 2)
-        couleurs = {s: l[0].cget("fg_color") for s, l in app._myvids_lignes.items()}
-        assert couleurs["v2"] == ("gray75", "gray30")
-        assert couleurs["v0"] == "transparent"
+        teinte = {s: app.myvids_tree.item(s, "tags")[0] for s in app.myvids_tree.get_children()}
+        assert teinte == {"v0": "pair", "v1": "alt", "v2": "courante"}
         app._myvids_toggle_multi(app.myvids_videos[1])
         app.update()
-        couleurs = {s: l[0].cget("fg_color") for s, l in app._myvids_lignes.items()}
-        assert couleurs["v1"] == couleurs["v2"] == module_app.C_MULTI
-
-    def test_repli_si_la_liste_a_disparu(self, mes_videos):
-        app = mes_videos
-        for w in app.myvids_list.winfo_children():
-            w.destroy()
-        _choisir(app, 1)
-        assert app._myvids_lignes and all(b.winfo_exists() for b, _c in app._myvids_lignes.values())
+        teinte = {s: app.myvids_tree.item(s, "tags")[0] for s in app.myvids_tree.get_children()}
+        assert teinte["v1"] == teinte["v2"] == "multi"
+        assert teinte["v0"] == "pair"
