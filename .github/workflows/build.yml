@@ -131,6 +131,10 @@ jobs:
         with:
           name: PodTeleverseur-Windows-Setup
           path: installer_output/PodTeleverseur-Windows-Setup.exe
+          # Le stockage des builds est commun à tous les dépôts du compte : sans
+          # limite, les builds d'essai l'ont rempli (dépôt refusé le 2026-10-22,
+          # constaté sur PodAdmin). La Release, elle, garde les installeurs.
+          retention-days: 14
 
   # ──────────────────────────────── macOS ────────────────────────────────
   build-macos:
@@ -222,6 +226,10 @@ jobs:
         with:
           name: PodTeleverseur-macOS-DMG
           path: dist/PodTeleverseur-macOS.dmg
+          # Le stockage des builds est commun à tous les dépôts du compte : sans
+          # limite, les builds d'essai l'ont rempli (dépôt refusé le 2026-10-22,
+          # constaté sur PodAdmin). La Release, elle, garde les installeurs.
+          retention-days: 14
 
   # ──────────────────────── Blocage à distance ─────────────────────────
   # Ne compile rien, ne concerne aucun numéro de version : écrit seulement

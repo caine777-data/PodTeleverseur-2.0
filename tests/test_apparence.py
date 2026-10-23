@@ -696,7 +696,8 @@ class TestSelectionMultiple:
         import inspect
 
         import app as module_app
-        source = inspect.getsource(module_app.App._myvids_render_detail)
+        # Les boutons sont créés une fois, dans _myvids_construire_detail (3.4.4).
+        source = inspect.getsource(module_app.App._myvids_construire_detail)
         assert "_myvids_edit_disciplines" in source
         assert "_myvids_edit_channels" in source
 
