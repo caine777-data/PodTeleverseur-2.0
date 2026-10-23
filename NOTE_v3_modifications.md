@@ -194,3 +194,23 @@ prévenir :
 `_pages_necessaires` : au moins `max_pages`, davantage si le total annoncé
 l'exige, garde-fou `PAGES_MAX_ABSOLU` (5 000 pages). Tests :
 `tests/test_pagination.py` (14 tests, 8 mutations).
+
+## 3.4.4 : « Mes vidéos » plus rapide, installeurs d'essai gardés 14 jours
+
+Repris de PodAdmin 1.13.0.
+
+- **Panneau de détail construit une fois, puis rempli** (`_myvids_construire_detail`,
+  `_myvids_remplir_detail`). Les commandes lisent la vidéo affichée au moment du
+  clic (`courante()`), jamais une vidéo capturée à la construction.
+- **Liste recolorée au lieu d'être reconstruite** à chaque clic
+  (`_myvids_teinter_lignes`, repli sur la reconstruction si la liste a disparu).
+- Mesure sur 40 vidéos (2026-10-23) : de 1,3 à 4,7 s par clic avant, de 0,08 à
+  0,35 s après.
+- Correctifs trouvés en route : le message « ✅ … » était effacé aussitôt par la
+  reconstruction du panneau ; les sous-titres d'une vidéo quittée pouvaient
+  s'afficher sous la suivante (clics rapides).
+- Workflow : `retention-days: 14` sur les deux envois d'installeur (stockage des
+  artefacts commun à tout le compte, rempli le 2026-10-22).
+
+Tests : `tests/test_detail_rapide.py` (12 tests, 13 mutations dont une
+équivalente), `tests/test_conservation_builds.py`.
