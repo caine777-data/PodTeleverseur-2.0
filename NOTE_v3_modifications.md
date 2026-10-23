@@ -178,3 +178,19 @@ une vidéo. La suppression des sous-titres reste possible.
 L'aide n'en parle plus : rubrique « 10. Supprimer une vidéo » retirée, les
 suivantes renumérotées (10 à 15). Les tutoriels n'en parlent pas non plus.
 Tests : `tests/test_sans_suppression.py` (8 tests, 8 mutations).
+
+## 3.4.3 : listes complètes malgré les 12 éléments par page de Pod
+
+Repris de PodAdmin 1.13.2. Le serveur impose 12 éléments par page et ignore
+`limit` ; les plafonds fixes, calculés pour 100 par page, tronquaient sans
+prévenir :
+
+| Liste | Avant | Correctif |
+|---|---|---|
+| Annuaire des co-propriétaires (`get_all_users`) | 80 pages, environ 960 comptes | pages relevées d'après `count` |
+| Lecture complète du fonds (« Mes vidéos », filtre refusé) | 300 pages, environ 3 600 vidéos | idem |
+| Types, disciplines, sites | une seule page, 12 au plus | paginés |
+
+`_pages_necessaires` : au moins `max_pages`, davantage si le total annoncé
+l'exige, garde-fou `PAGES_MAX_ABSOLU` (5 000 pages). Tests :
+`tests/test_pagination.py` (14 tests, 8 mutations).

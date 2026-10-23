@@ -26,6 +26,7 @@ __date__        = "2026"
 __license__     = "Usage interne — Université de Toulouse"
 
 
+import math
 import os
 import re
 import time
@@ -49,6 +50,10 @@ except ImportError:
 # indéfiniment et la relance automatique (3 essais) ne se déclenchait jamais,
 # puisqu'aucune exception n'était levée.
 UPLOAD_TIMEOUT = (30, 600)
+
+# Garde-fou de la pagination (repris de PodAdmin 1.13.2) : au-delà, la
+# lecture s'arrête. 5 000 pages de 12 éléments = 60 000 éléments.
+PAGES_MAX_ABSOLU = 5000
 
 
 class PodAPIError(Exception):
@@ -186,7 +191,14 @@ class PodAPI:
     def _paginate(self, endpoint: str, params: dict | None = None,
                   max_pages: int = 300,
                   progress_cb: Optional[Callable[[int], None]] = None) -> list[dict]:
-        """Suit le champ 'next' jusqu'au bout. progress_cb(nb_cumulé) optionnel."""
+        """Suit le champ 'next' jusqu'au bout. progress_cb(nb_cumulé) optionnel.
+
+        `max_pages` est un MINIMUM, relevé d'après le total annoncé par Pod
+        (champ `count` de la première page). Le serveur de l'université
+        impose 12 éléments par page et ignore `limit` : les plafonds fixes,
+        calculés pour 100 par page, coupaient l'annuaire des co-propriétaires
+        vers 960 comptes et la lecture complète du fonds vers 3 600 vidéos.
+        """
         items: list[dict] = []
         url = self._abs(endpoint)
         p = dict(params or {})
@@ -197,6 +209,8 @@ class PodAPI:
                                  headers={"Accept": "application/json"},
                                  timeout=30, verify=self.verify_ssl)
             data = self._json(r)
+            if pages == 0:
+                max_pages = self._pages_necessaires(data, max_pages)
             if isinstance(data, dict):
                 items.extend(data.get("results", []))
                 # URL absolue de la page suivante, fournie par le serveur :
@@ -211,6 +225,20 @@ class PodAPI:
             if progress_cb:
                 progress_cb(len(items))
         return items
+
+    @staticmethod
+    def _pages_necessaires(premiere_page, max_pages: int) -> int:
+        """Nombre de pages à lire : au moins `max_pages`, davantage si le
+        total annoncé l'exige (taille de page réelle = celle de la 1re page)."""
+        if not isinstance(premiere_page, dict):
+            return max_pages
+        total = premiere_page.get("count")
+        par_page = len(premiere_page.get("results") or [])
+        if not isinstance(total, int) or par_page <= 0:
+            return max_pages
+        # +1 : un élément ajouté pendant la lecture ne doit pas tronquer la fin.
+        besoin = math.ceil(total / par_page) + 1
+        return max(max_pages, min(besoin, PAGES_MAX_ABSOLU))
 
     # ╔══════════════════════════════════════════════════════════════════╗
     # ║  TÉLÉVERSEUR (conservé tel quel)                                  ║
@@ -328,18 +356,18 @@ class PodAPI:
     # ── 2. Types / chaînes / sites ────────────────────────────────────────
 
     def get_types(self) -> list[dict]:
-        """Liste les TYPES de vidéo de l'instance (ex. Cours, Conférence…)."""
-        data = self._get("/types/", {"limit": 100})
-        return data.get("results", []) if isinstance(data, dict) else (data or [])
+        """Liste les TYPES de vidéo de l'instance (ex. Cours, Conférence…).
+
+        Paginé : une seule requête ne rendait que les 12 premiers types."""
+        return self._paginate("/types/", {"limit": 100})
 
     def get_channels(self) -> list[dict]:
         """Liste toutes les CHAÎNES (paginé)."""
         return self._paginate("/channels/", {"limit": 200})
 
     def get_sites(self) -> list[dict]:
-        """Sites de l'instance (requis pour l'upload multi-établissements)."""
-        data = self._get("/sites/", {"limit": 100})
-        return data.get("results", []) if isinstance(data, dict) else (data or [])
+        """Sites de l'instance (requis pour l'upload multi-établissements), paginé."""
+        return self._paginate("/sites/", {"limit": 100})
 
     # ── 3. Upload d'une vidéo (streaming + progression) ───────────────────
 
@@ -733,9 +761,10 @@ class PodAPI:
     #              via parentId.
 
     def get_disciplines(self) -> list[dict]:
-        """Liste les disciplines de l'instance (reprise de PodAdmin)."""
-        data = self._get("/discipline/", {"limit": 200})
-        return data.get("results", []) if isinstance(data, dict) else (data or [])
+        """Liste les disciplines de l'instance (reprise de PodAdmin).
+
+        Paginé : une seule requête ne rendait que les 12 premières."""
+        return self._paginate("/discipline/", {"limit": 200})
 
     def set_disciplines(self, video, discipline_urls: list[str]) -> dict:
         """Remplace les disciplines d'une vidéo (réf = dict, URL, id ou slug).
