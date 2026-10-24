@@ -659,12 +659,14 @@ class TestSelectionMultiple:
         app._myvids_select(app.myvids_videos[2])
         assert app.myvids_multi == []
 
-    def test_le_relachement_du_ctrl_clic_est_bloque(self):
-        """⚠️ CTkButton agit au RELÂCHEMENT : sans ce blocage, un Ctrl+clic
-        lançait aussi une sélection simple (piège rencontré dans PodAdmin)."""
-        source = open(os.path.join(RACINE, "app.py"), encoding="utf-8").read()
-        assert '"<Control-ButtonRelease-1>", lambda e: "break"' in source
-        assert '"<Shift-ButtonRelease-1>", lambda e: "break"' in source
+    def test_ctrl_et_maj_clic_ont_leur_liaison(self, app):
+        """Un Ctrl+clic ou un Maj+clic ne doit pas lancer aussi une sélection
+        simple. Depuis le tableau natif (3.5.0), il suffit que chaque geste
+        ait sa propre liaison : Tk n'appelle que la plus précise."""
+        arbre = app.myvids_tree
+        assert arbre.bind("<Control-Button-1>")
+        assert arbre.bind("<Shift-Button-1>")
+        assert arbre.bind("<Button-1>")
 
     def test_un_echec_n_arrete_pas_le_lot(self, app):
         """Chaque vidéo est traitée INDÉPENDAMMENT."""

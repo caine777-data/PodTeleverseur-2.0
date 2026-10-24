@@ -35,7 +35,7 @@ import uuid
 from datetime import datetime
 
 import customtkinter as ctk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 
 import config as cfg
 import maj                     # vérification de mise à jour (dépôt public)
@@ -47,6 +47,8 @@ import maj                     # vérification de mise à jour (dépôt public)
 # couleurs et trois fonctions, tous en MAJUSCULES ou nommés sans ambiguïté.
 from theme import *                                    # noqa: F401,F403
 from theme import message_utilisateur, etat_vide, verifier_palette  # noqa: F401
+from tableau import (PastilleFiltre, RangeeFluide, T_LIEN, enregistrer_tableau,
+                     styler_tableaux)
 from pod_api import PodAPI, PodAPIError, EnvoiAnnule, SUBTITLE_LANGS, SUBTITLE_KINDS
 # Moteur de téléversement par morceaux via session web (gros fichiers > seuil).
 from pod_chunked import PodChunkedSession, PodChunkedError
@@ -99,6 +101,18 @@ COULEURS_LOT = {
     "restricted": ("#b45309", "#b45309"),
     "channels":   ("#2563eb", "#2563eb"),
 }
+
+# Colonnes du tableau « Mes vidéos » : identifiant → (en-tête, largeur, alignement).
+ENTETES_MES_VIDEOS = {
+    "statut": ("", 40, "center"),
+    "titre": ("Titre", 250, "w"),
+    "role": ("Rôle", 70, "center"),
+    "date": ("Ajoutée le", 100, "center"),
+    "enc": ("Encodée", 70, "center"),
+}
+# Tris, choisis d'un clic sur les en-têtes (Titre, Ajoutée le). « Plus
+# récentes » est l'ordre renvoyé par Pod.
+TRIS_MES_VIDEOS = ("Plus récentes", "Plus anciennes", "A → Z", "Z → A")
 
 # Texte de la fenêtre de mise à jour OBLIGATOIRE. Volontairement neutre : il
 # ne donne jamais la raison du blocage (voir `_bloquer_demarrage`).
@@ -384,6 +398,8 @@ class App(_AppBase):
         """Passe du mode sombre au mode clair, et inversement."""
         nouveau = "light" if ctk.get_appearance_mode().lower() == "dark" else "dark"
         ctk.set_appearance_mode(nouveau)
+        # Un Treeview n'a que des couleurs simples : il faut le restyler.
+        styler_tableaux(self)
         self._maj_libelle_theme()
         try:
             cfg.save_theme(nouveau)
@@ -1639,30 +1655,34 @@ class App(_AppBase):
                                           font=ctk.CTkFont(size=11))
         self.myvids_status.pack(side="left", padx=10)
 
-        # — Ligne : filtres (identiques à PodAdmin, moins rien) —
-        filt = ctk.CTkFrame(frame, fg_color="transparent")
-        filt.pack(fill="x", pady=(8, 4))
-        self.myvids_text = ctk.CTkEntry(filt, placeholder_text="🔍 titre / slug…")
-        self.myvids_text.pack(side="left", fill="x", expand=True)
+        # — Recherche pleine largeur, puis filtres en pastilles (PodAdmin 1.13) —
+        # Les menus déroulants s'élargissaient pour afficher la valeur choisie
+        # et débordaient de la fenêtre ; une pastille ne prend que la place de
+        # son nom et passe à la ligne si la place manque.
+        self.myvids_text = ctk.CTkEntry(frame, placeholder_text="🔍  Rechercher un titre ou un slug…",
+                                        height=32)
+        self.myvids_text.pack(fill="x", pady=(8, 0))
         self.myvids_text.bind("<KeyRelease>", lambda e: self._myvids_apply_filter())
-        self.myvids_statut = ctk.CTkOptionMenu(
-            filt, width=130, values=["Tous statuts", "Brouillon", "Public", "Restreinte"],
-            command=lambda _c: self._myvids_apply_filter(), **STYLE_CHAMP)
-        self.myvids_statut.set("Tous statuts")
-        self.myvids_statut.pack(side="left", padx=6)
-        self.myvids_encode = ctk.CTkOptionMenu(
-            filt, width=150, values=["Tout encodage", "Encodées", "Non-encodées"],
-            command=lambda _c: self._myvids_apply_filter(), **STYLE_CHAMP)
-        self.myvids_encode.set("Tout encodage")
-        self.myvids_encode.pack(side="left", padx=6)
-        self.myvids_chan = ctk.CTkOptionMenu(filt, width=170, values=["Toutes chaînes"],
-                                             command=lambda _c: self._myvids_apply_filter(), **STYLE_CHAMP)
-        self.myvids_chan.set("Toutes chaînes")
-        self.myvids_chan.pack(side="left", padx=6)
-        self.myvids_type = ctk.CTkOptionMenu(filt, width=150, values=["Tous types"],
-                                             command=lambda _c: self._myvids_apply_filter(), **STYLE_CHAMP)
-        self.myvids_type.set("Tous types")
-        self.myvids_type.pack(side="left", padx=6)
+        self.myvids_pastilles = RangeeFluide(frame)
+        self.myvids_pastilles.pack(fill="x", pady=(6, 4))
+        rappel = lambda _c: self._myvids_apply_filter()
+        # La PREMIÈRE valeur de chaque pastille est la valeur neutre.
+        self.myvids_statut = PastilleFiltre(
+            self.myvids_pastilles, "Statut", ["Tous statuts", "Brouillon", "Public", "Restreint"],
+            command=rappel)
+        self.myvids_encode = PastilleFiltre(
+            self.myvids_pastilles, "Encodage", ["Tout encodage", "Encodées", "Non-encodées"],
+            command=rappel)
+        self.myvids_chan = PastilleFiltre(self.myvids_pastilles, "Chaîne", ["Toutes chaînes"],
+                                          command=rappel)
+        self.myvids_type = PastilleFiltre(self.myvids_pastilles, "Type", ["Tous types"],
+                                          command=rappel)
+        self.myvids_role = PastilleFiltre(
+            self.myvids_pastilles, "Rôle", ["Tous rôles", "Propriétaire", "Co-propriétaire"],
+            command=rappel)
+        for pastille in (self.myvids_statut, self.myvids_encode, self.myvids_chan,
+                         self.myvids_type, self.myvids_role):
+            self.myvids_pastilles.ajouter(pastille)
 
         # La barre « Modifier en masse » (type des vidéos AFFICHÉES) a été
         # RETIRÉE : le type d'un lot passe par la sélection (« Tout
@@ -1676,11 +1696,56 @@ class App(_AppBase):
         body.columnconfigure(1, weight=3)
         body.rowconfigure(1, weight=1)
 
-        self.myvids_count_lbl = ctk.CTkLabel(body, text="", text_color=T_SECONDAIRE,
+        compteur = ctk.CTkFrame(body, fg_color="transparent")
+        compteur.grid(row=0, column=0, sticky="w", pady=(0, 2))
+        self.myvids_count_lbl = ctk.CTkLabel(compteur, text="", text_color=T_SECONDAIRE,
                                              font=ctk.CTkFont(size=11), anchor="w")
-        self.myvids_count_lbl.grid(row=0, column=0, sticky="w", pady=(0, 2))
-        self.myvids_list = ctk.CTkScrollableFrame(body, label_text="Mes vidéos")
+        self.myvids_count_lbl.pack(side="left")
+        # Lien discret, affiché seulement quand une recherche ou un filtre est actif.
+        self.myvids_effacer_btn = ctk.CTkButton(
+            compteur, text="Effacer les filtres", width=0, height=20, fg_color="transparent",
+            hover_color=C_NEUTRE_SURV, text_color=T_LIEN, font=ctk.CTkFont(size=11, underline=True),
+            command=self._myvids_effacer_filtres)
+
+        # TABLEAU NATIF (ttk.Treeview) et non plus un bouton CustomTkinter par
+        # vidéo, comme PodAdmin 1.12 : Tk affiche des milliers de lignes sans
+        # ralentir, sans plafond, avec des colonnes triables. `myvids_list`
+        # reste le conteneur : l'état vide s'y affiche à la place du tableau.
+        self.myvids_list = ctk.CTkFrame(body, fg_color=S_CARTE)
         self.myvids_list.grid(row=1, column=0, sticky="nsew", padx=(0, 6))
+        self._myvids_cadre_arbre = ctk.CTkFrame(self.myvids_list, fg_color="transparent")
+        self._myvids_cadre_arbre.pack(fill="both", expand=True, padx=4, pady=4)
+        self.myvids_tree = ttk.Treeview(
+            self._myvids_cadre_arbre, columns=tuple(ENTETES_MES_VIDEOS), show="headings",
+            style="Pod.Treeview",
+            # Sélection native COUPÉE : la sélection simple (panneau de détail)
+            # et la sélection multiple (lots) gardent leur logique, et leurs
+            # teintes sont posées par des étiquettes (_myvids_teinter_lignes).
+            selectmode="none")
+        for col, (titre, largeur, ancre) in ENTETES_MES_VIDEOS.items():
+            self.myvids_tree.heading(col, text=titre, anchor=ancre,
+                                     command=lambda c=col: self._myvids_trier_par(c))
+            self.myvids_tree.column(col, width=largeur, minwidth=30, anchor=ancre,
+                                    stretch=(col == "titre"))
+        barre = ctk.CTkScrollbar(self._myvids_cadre_arbre, command=self.myvids_tree.yview)
+        self.myvids_tree.configure(yscrollcommand=barre.set)
+        barre.pack(side="right", fill="y")
+        self.myvids_tree.pack(side="left", fill="both", expand=True)
+        # Clic simple, Ctrl+clic (ajoute ou retire), Maj+clic (plage), comme
+        # dans un explorateur de fichiers ; flèches haut et bas pour parcourir.
+        self.myvids_tree.bind("<Button-1>", self._myvids_clic_ligne)
+        self.myvids_tree.bind("<Control-Button-1>", lambda e: self._myvids_clic_ligne(e, "ctrl"))
+        self.myvids_tree.bind("<Shift-Button-1>", lambda e: self._myvids_clic_ligne(e, "maj"))
+        # Sur Mac, Ctrl+clic est le clic droit du système : le geste attendu
+        # pour ajouter une ligne est Cmd+clic.
+        if sys.platform == "darwin":
+            self.myvids_tree.bind("<Command-Button-1>",
+                                  lambda e: self._myvids_clic_ligne(e, "ctrl"))
+        self.myvids_tree.bind("<Up>", lambda e: self._myvids_deplacer(-1))
+        self.myvids_tree.bind("<Down>", lambda e: self._myvids_deplacer(1))
+        enregistrer_tableau(self.myvids_tree)
+        self._myvids_vide_widgets = []   # widgets de l'état vide, s'il est affiché
+        self._myvids_tri = TRIS_MES_VIDEOS[0]
         self.myvids_detail = ctk.CTkScrollableFrame(body, label_text="Détail / actions")
         self.myvids_detail.grid(row=1, column=1, sticky="nsew", padx=(6, 0))
 
@@ -1783,8 +1848,7 @@ class App(_AppBase):
         self.myvids_videos = []
         self.myvids_filtered = []
         if hasattr(self, "myvids_list"):
-            for w in self.myvids_list.winfo_children():
-                w.destroy()
+            self._myvids_vider_tableau()
             self._myvids_render_detail()
             self.myvids_status.configure(text="(à rafraîchir)", text_color=T_SECONDAIRE)
         # Rafraîchissement LIVE si l'onglet est à l'écran, sinon au prochain affichage.
@@ -1814,8 +1878,7 @@ class App(_AppBase):
         # garder ferait agir une action de lot sur des lignes disparues.
         self.myvids_multi = []
         if hasattr(self, "myvids_list"):
-            for w in self.myvids_list.winfo_children():
-                w.destroy()
+            self._myvids_vider_tableau()
             self._myvids_render_detail()
             self.myvids_status.configure(text="(à rafraîchir — nouveau dépôt)",
                                          text_color=T_SECONDAIRE)
@@ -2041,8 +2104,8 @@ class App(_AppBase):
         """Applique les filtres (statut/encodage/chaîne/type/texte) au cache."""
         if not self.myvids_videos:
             self.myvids_count_lbl.configure(text="Cliquez sur « 🔄 Rafraîchir ».")
-            for w in self.myvids_list.winfo_children():
-                w.destroy()
+            self.myvids_effacer_btn.pack_forget()
+            self._myvids_vider_tableau()
             return
 
         vids = self.myvids_videos
@@ -2051,8 +2114,10 @@ class App(_AppBase):
         if st == "Brouillon":
             vids = [v for v in vids if v.get("is_draft")]
         elif st == "Public":
-            vids = [v for v in vids if not v.get("is_draft")]
-        elif st == "Restreinte":
+            # Les trois statuts sont exclusifs (voir STATUTS) : une vidéo
+            # restreinte n'est pas publique, même si elle n'est pas brouillon.
+            vids = [v for v in vids if not v.get("is_draft") and not v.get("is_restricted")]
+        elif st == "Restreint":
             vids = [v for v in vids if v.get("is_restricted")]
         # Filtre encodage
         enc = self.myvids_encode.get()
@@ -2090,80 +2155,193 @@ class App(_AppBase):
                 return f"{v.get('title','')} {v.get('slug','')}".lower()
             vids = [v for v in vids if txt in hay(v)]
 
-        self.myvids_filtered = vids
+        # Filtre rôle : vidéos possédées, ou partagées par un collègue
+        role = self.myvids_role.get()
+        if role in ("Propriétaire", "Co-propriétaire"):
+            cible = "proprietaire" if role == "Propriétaire" else "coproprietaire"
+            ids = self._myvids_owner_ids()
+            vids = [v for v in vids if self._role_sur_video(v, ids) == cible]
+
+        self.myvids_filtered = self._myvids_trier(vids)
         self._render_myvids_list()
 
     def _render_myvids_list(self):
-        """Reconstruit la liste de gauche (plafonnée pour ne pas figer Tk).
+        """Affiche TOUTE la liste filtrée dans le tableau (plus de plafond :
+        le Treeview reste fluide avec des milliers de lignes).
 
-        Coûteuse (un bouton par vidéo) : à réserver aux changements de
-        CONTENU (chargement, filtre, modification). Un simple changement de
-        sélection passe par `_myvids_teinter_lignes`."""
-        for w in self.myvids_list.winfo_children():
-            w.destroy()
-        self._myvids_lignes = {}          # slug → [bouton, couleur affichée]
-        self.myvids_count_lbl.configure(text=f"{len(self.myvids_filtered)} vidéo(s).")
-
+        À réserver aux changements de CONTENU (chargement, filtre, tri,
+        modification) ; un changement de sélection passe par
+        `_myvids_teinter_lignes`."""
+        self._myvids_maj_compteur()
+        arbre = self.myvids_tree
+        arbre.delete(*arbre.get_children())
         if not self.myvids_filtered:
-            ctk.CTkLabel(self.myvids_list, text="Aucune vidéo ne correspond.",
-                         text_color=T_SECONDAIRE).pack(pady=10)
+            self._myvids_montrer_vide(True)
             return
+        self._myvids_montrer_vide(False)
+        ids = self._myvids_owner_ids()
+        for v in self.myvids_filtered:
+            slug = v.get("slug")
+            if not slug or arbre.exists(slug):
+                continue                       # slug absent ou en double : ligne ignorée
+            # L'identifiant de ligne EST le slug, unique dans Pod.
+            arbre.insert("", "end", iid=slug, values=self._myvids_valeurs(v, ids))
+        self._myvids_teinter_lignes()
+        self._myvids_maj_entetes()
 
-        CAP = 300
-        sel_slug = self.myvids_selected.get("slug") if self.myvids_selected else None
-        for v in self.myvids_filtered[:CAP]:
-            slug = v.get("slug", "?")
-            title = (v.get("title") or "(sans titre)")[:48]
-            tag = "📝" if v.get("is_draft") else "🌐"      # brouillon / public
-            if self._role_sur_video(v, self._myvids_owner_ids()) == "coproprietaire":
-                tag += " 👥"                                 # co-propriété
-            couleur = self._myvids_couleur_ligne(slug, sel_slug)
-            btn = ctk.CTkButton(
-                self.myvids_list, text=f"{tag}  {title}", anchor="w", height=H_NORMAL,
-                fg_color=couleur,
-                text_color=("gray10", "gray90"), hover_color=("gray75", "gray28"),
-                font=ctk.CTkFont(size=12),
-                command=lambda vv=v: self._myvids_select(vv))
-            btn.pack(fill="x", pady=1)
-            self._myvids_lignes[slug] = [btn, couleur]
-            # ⚠️ CTkButton déclenche sa commande au RELÂCHEMENT du clic : bloquer
-            # le seul <Control-Button-1> ne suffit pas, le relâchement lançait
-            # quand même une sélection simple (piège rencontré dans PodAdmin).
-            btn.bind("<Control-Button-1>", lambda e, vv=v: self._myvids_toggle_multi(vv))
-            btn.bind("<Shift-Button-1>", lambda e, vv=v: self._myvids_plage_multi(vv))
-            btn.bind("<Control-ButtonRelease-1>", lambda e: "break")
-            btn.bind("<Shift-ButtonRelease-1>", lambda e: "break")
-        if len(self.myvids_filtered) > CAP:
-            ctk.CTkLabel(self.myvids_list,
-                         text=f"… +{len(self.myvids_filtered) - CAP} autres. Affinez le filtre.",
-                         text_color=T_SECONDAIRE).pack(pady=4)
+    def _myvids_valeurs(self, v, ids) -> tuple:
+        """Valeurs des colonnes pour une vidéo (voir ENTETES_MES_VIDEOS)."""
+        if v.get("is_draft"):
+            statut = "📝"
+        else:
+            statut = "🔒" if v.get("is_restricted") else "🌐"
+        date = str(v.get("date_added") or "")[:10]
+        if len(date) == 10 and date[4] == "-":
+            date = f"{date[8:10]}/{date[5:7]}/{date[:4]}"   # AAAA-MM-JJ → JJ/MM/AAAA
+        partagee = self._role_sur_video(v, ids) == "coproprietaire"
+        return (statut, v.get("title") or "(sans titre)", "👥" if partagee else "",
+                date, "non" if PodAPI.is_unencoded(v) else "oui")
 
-    def _myvids_couleur_ligne(self, slug, sel_slug):
-        """Teinte d'une ligne : lot (bleu), vidéo ouverte (gris) ou aucune."""
+    def _myvids_vider_tableau(self):
+        """Vide le tableau (liste à recharger), sans afficher d'état vide."""
+        self.myvids_tree.delete(*self.myvids_tree.get_children())
+        self._myvids_montrer_vide(False)
+
+    def _myvids_montrer_vide(self, vide: bool):
+        """Bascule entre le tableau et l'état vide qui explique quoi faire."""
+        for w in self._myvids_vide_widgets:
+            try:
+                w.destroy()
+            except Exception:
+                pass
+        self._myvids_vide_widgets = []
+        if not vide:
+            if not self._myvids_cadre_arbre.winfo_manager():
+                self._myvids_cadre_arbre.pack(fill="both", expand=True, padx=4, pady=4)
+            return
+        self._myvids_cadre_arbre.pack_forget()
+        avant = set(self.myvids_list.winfo_children())
+        etat_vide(self.myvids_list, "🔍", "Aucune vidéo ne correspond.",
+                  "Élargissez la recherche, ou cliquez sur « Effacer les filtres ».")
+        self._myvids_vide_widgets = [w for w in self.myvids_list.winfo_children()
+                                     if w not in avant]
+
+    def _myvids_teinte(self, slug, rang) -> str:
+        """Étiquette de teinte d'une ligne. UNE seule à la fois : quand deux
+        étiquettes fixent le fond, la priorité entre elles n'est pas garantie
+        d'une version de Tk à l'autre. La sélection multiple l'emporte."""
         if slug in self.myvids_multi:
-            return C_MULTI
-        return ("gray75", "gray30") if slug == sel_slug else "transparent"
+            return "multi"
+        if self.myvids_selected and slug == self.myvids_selected.get("slug"):
+            return "courante"
+        return "alt" if rang % 2 else "pair"
 
     def _myvids_teinter_lignes(self):
-        """Met à jour la surbrillance sans reconstruire la liste.
+        """Pose la teinte de toutes les lignes, sans reconstruire le tableau.
 
-        Reconstruire la liste à chaque clic coûtait 0,96 s pour 40 vidéos
-        (mesuré le 2026-10-23) ; seules les lignes dont la teinte change sont
-        retouchées. Repli sur la reconstruction si la liste n'est pas là."""
-        lignes = getattr(self, "_myvids_lignes", None)
-        try:
-            intacte = bool(lignes) and all(b.winfo_exists() for b, _c in lignes.values())
-        except Exception:
-            intacte = False
-        if not intacte:
-            self._render_myvids_list()
+        Une étiquette par ligne : quelques millisecondes pour des centaines
+        de vidéos, là où l'ancienne liste de boutons se reconstruisait en
+        une seconde à chaque clic."""
+        arbre = self.myvids_tree
+        for rang, slug in enumerate(arbre.get_children()):
+            arbre.item(slug, tags=(self._myvids_teinte(slug, rang),))
+
+    def _myvids_pastilles_actives(self) -> list:
+        return [p for p in self.myvids_pastilles.elements if p.est_active()]
+
+    def _myvids_maj_compteur(self):
+        """« 40 vidéo(s) » au repos ; « 12 vidéo(s) sur 40 · 2 filtres actifs »
+        et le lien « Effacer les filtres » dès qu'une recherche ou un filtre
+        restreint la liste."""
+        n, total = len(self.myvids_filtered), len(self.myvids_videos)
+        actifs = len(self._myvids_pastilles_actives())
+        if not actifs and not self.myvids_text.get().strip():
+            self.myvids_count_lbl.configure(text=f"{n} vidéo(s).")
+            self.myvids_effacer_btn.pack_forget()
             return
-        sel_slug = self.myvids_selected.get("slug") if self.myvids_selected else None
-        for slug, ligne in lignes.items():
-            couleur = self._myvids_couleur_ligne(slug, sel_slug)
-            if couleur != ligne[1]:
-                ligne[0].configure(fg_color=couleur)
-                ligne[1] = couleur
+        texte = f"{n} vidéo(s) sur {total}"
+        if actifs:
+            pluriel = "s" if actifs > 1 else ""
+            texte += f"  ·  {actifs} filtre{pluriel} actif{pluriel}"
+        self.myvids_count_lbl.configure(text=texte)
+        if not self.myvids_effacer_btn.winfo_manager():
+            self.myvids_effacer_btn.pack(side="left", padx=(8, 0))
+
+    def _myvids_effacer_filtres(self):
+        """Remet la recherche et toutes les pastilles à leur valeur neutre."""
+        self.myvids_text.delete(0, "end")
+        for p in self.myvids_pastilles.elements:
+            p.set(p.cget("values")[0])
+        self.myvids_pastilles.reorganiser_plus_tard()
+        self._myvids_apply_filter()
+
+    def _myvids_trier(self, vids) -> list:
+        """Ordonne la liste filtrée selon le tri choisi par les en-têtes."""
+        tri = self._myvids_tri
+        if tri == "A → Z":
+            return sorted(vids, key=lambda v: (v.get("title") or "").lower())
+        if tri == "Z → A":
+            return sorted(vids, key=lambda v: (v.get("title") or "").lower(), reverse=True)
+        if tri == "Plus anciennes":
+            return list(reversed(vids))
+        return list(vids)                      # « Plus récentes » : l'ordre de Pod
+
+    def _myvids_maj_entetes(self):
+        """Flèche ▲ ou ▼ sur l'en-tête de la colonne qui fixe le tri."""
+        fleches = {"A → Z": ("titre", "▲"), "Z → A": ("titre", "▼"),
+                   "Plus récentes": ("date", "▼"), "Plus anciennes": ("date", "▲")}
+        col_tri, fleche = fleches.get(self._myvids_tri, (None, ""))
+        for col, (titre, _l, _a) in ENTETES_MES_VIDEOS.items():
+            self.myvids_tree.heading(col, text=f"{titre}  {fleche}" if col == col_tri else titre)
+
+    def _myvids_trier_par(self, col: str):
+        """Clic sur un en-tête : trie par cette colonne ; un second clic sur la
+        même colonne inverse l'ordre. Statut, rôle et encodage ne trient pas."""
+        tri = self._myvids_tri
+        nouveau = {"titre": "Z → A" if tri == "A → Z" else "A → Z",
+                   "date": "Plus anciennes" if tri == "Plus récentes" else "Plus récentes"}.get(col)
+        if not nouveau:
+            return
+        self._myvids_tri = nouveau
+        self._myvids_apply_filter()
+
+    def _myvids_video_de(self, slug):
+        """Objet vidéo (filtré) correspondant à un slug, ou None."""
+        return next((v for v in self.myvids_filtered if v.get("slug") == slug), None)
+
+    def _myvids_clic_ligne(self, evt, modificateur=None):
+        """Clic dans le tableau : simple, Ctrl (ajoute ou retire), Maj (plage).
+
+        Renvoie "break" pour que le Treeview n'applique pas son propre
+        comportement par-dessus ; un clic d'en-tête est laissé au tri."""
+        if self.myvids_tree.identify_region(evt.x, evt.y) == "heading":
+            return None
+        slug = self.myvids_tree.identify_row(evt.y)
+        v = self._myvids_video_de(slug) if slug else None
+        if v is None:
+            return "break"
+        self.myvids_tree.focus_set()           # pour les flèches du clavier
+        if modificateur == "ctrl":
+            self._myvids_toggle_multi(v)
+        elif modificateur == "maj":
+            self._myvids_plage_multi(v)
+        else:
+            self._myvids_select(v)
+        return "break"
+
+    def _myvids_deplacer(self, pas: int):
+        """Flèche haut ou bas : ouvre la vidéo voisine."""
+        lignes = self.myvids_tree.get_children()
+        if not lignes:
+            return "break"
+        courant = self.myvids_selected.get("slug") if self.myvids_selected else None
+        rang = lignes.index(courant) + pas if courant in lignes else 0
+        rang = max(0, min(len(lignes) - 1, rang))
+        v = self._myvids_video_de(lignes[rang])
+        if v is not None:
+            self._myvids_select(v)
+            self.myvids_tree.see(lignes[rang])
+        return "break"
 
     # ── Sélection multiple ──────────────────────────────────────────────
 
@@ -4335,22 +4513,31 @@ class App(_AppBase):
 
             ("8. Mes vidéos — gérer vos vidéos déposées",
              "L'onglet « Mes vidéos » affiche UNIQUEMENT les vidéos du compte "
-             "déposant sélectionné — celles dont il est propriétaire, et celles "
-             "dont il est co-propriétaire (repérées par 👥 dans la liste). Vous ne "
-             "voyez jamais les vidéos des autres. "
-             "Cliquez sur « 🔄 Rafraîchir » pour charger la liste, puis sur une vidéo "
-             "pour ouvrir son panneau de détail à droite. Après un dépôt réussi, la "
-             "liste se met à jour d'elle-même : aussitôt si l'onglet est ouvert, "
-             "sinon à sa prochaine ouverture.\n\n"
-             "Depuis ce panneau, vous pouvez : renommer la vidéo, changer son "
-             "statut (brouillon / public / restreint) et son type, ajouter des "
-             "co-propriétaires, gérer les sous-titres, ou remplacer le fichier "
-             "vidéo.\n\n"
-             "Depuis la section Classement, « 🏷️ Disciplines… » choisit les "
-             "disciplines de la vidéo ; dans Relations, « 🗂 Chaînes et thèmes… » "
-             "la place dans des chaînes et leurs thèmes (cocher un thème coche sa "
-             "chaîne).\n\n"
-             "SÉLECTION MULTIPLE : Ctrl+clic ajoute ou retire une vidéo, Maj+clic "
+             "déposant sélectionné : celles dont il est propriétaire, et celles "
+             "qu'un collègue partage avec lui (co-propriété). Vous ne voyez jamais "
+             "les vidéos des autres. Cliquez sur « 🔄 Rafraîchir » pour charger la "
+             "liste. Après un dépôt réussi, elle se met à jour d'elle-même : aussitôt "
+             "si l'onglet est ouvert, sinon à sa prochaine ouverture.\n\n"
+             "LE TABLEAU : une ligne par vidéo, avec son statut (🌐 public, "
+             "🔒 restreint, 📝 brouillon), son titre, son rôle (👥 = vidéo partagée "
+             "avec vous), sa date d'ajout et son encodage. Cliquez sur l'en-tête "
+             "« Titre » ou « Ajoutée le » pour trier (un second clic inverse "
+             "l'ordre). Les flèches haut et bas du clavier passent d'une vidéo à "
+             "la suivante.\n\n"
+             "RETROUVER UNE VIDÉO : tapez un mot du titre dans la recherche, ou "
+             "utilisez les filtres en pastilles (Statut, Encodage, Chaîne, Type, "
+             "Rôle). Un filtre actif passe en bleu ; cliquez sur sa ✕ pour le "
+             "retirer, ou sur « Effacer les filtres » pour tout remettre à zéro. "
+             "Le filtre Rôle montre vos propres vidéos ou celles qu'un collègue "
+             "partage avec vous.\n\n"
+             "UNE VIDÉO : cliquez sur sa ligne pour ouvrir son panneau à droite. "
+             "Vous pouvez la renommer, changer son statut (brouillon / public / "
+             "restreint) et son type, choisir ses disciplines (« 🏷️ "
+             "Disciplines… »), ajouter des co-propriétaires, la placer dans des "
+             "chaînes et leurs thèmes (« 🗂 Chaînes et thèmes… » ; cocher un thème "
+             "coche sa chaîne), gérer ses sous-titres ou remplacer son fichier "
+             "vidéo. « Ouvrir dans le navigateur » l'affiche sur la plateforme.\n\n"
+             "PLUSIEURS VIDÉOS : Ctrl+clic ajoute ou retire une vidéo, Maj+clic "
              "sélectionne une plage, « ☑ Tout sélectionner » prend toutes les "
              "vidéos affichées. Le panneau de droite liste les vidéos concernées "
              "et propose d'agir sur tout le lot : mettre en brouillon, rendre "
@@ -4358,10 +4545,7 @@ class App(_AppBase):
              "remplacement), appliquer un type, choisir des disciplines. Une "
              "confirmation est toujours demandée. « 🛑 Interrompre le "
              "traitement » arrête le lot après la vidéo en cours. « ✖ Annuler la "
-             "sélection », ou un clic simple, revient à une seule vidéo.\n\n"
-             "Les filtres en haut (texte, chaîne, type, statut) permettent de "
-             "retrouver rapidement une vidéo quand la liste est longue. Le bouton "
-             "« Ouvrir dans le navigateur » affiche la vidéo dans votre navigateur."),
+             "sélection », ou un clic simple, revient à une seule vidéo."),
 
             ("9. Remplacer & ré-encoder un fichier",
              "Cette action remplace le FICHIER VIDÉO d'une vidéo existante, sans rien "

@@ -16,16 +16,19 @@ d'accès, réaffectation, inventaire, modération…) ont été retirés.
   propriétaires additionnels communs, lancement automatique de l'encodage.
   Les gros fichiers (> 150 Mo) passent par le téléversement **par morceaux**
   (chunké) pour absorber les coupures de la passerelle.
-- **🎞️ Mes vidéos** — gestion des vidéos **du propriétaire sélectionné**
-  (uniquement les siennes) :
-  - filtres (texte, statut, encodage, chaîne, type) ;
+- **🎞️ Mes vidéos** — gestion des vidéos **du propriétaire sélectionné**,
+  et de celles dont il est co-propriétaire :
+  - tableau triable, recherche et filtres en pastilles (statut, encodage,
+    chaîne, type, rôle) ;
   - renommer, changer le **statut** (Brouillon / Public / Restreint) ;
-  - changer le **type**, gérer les **co-propriétaires** ;
+  - changer le **type** et les **disciplines**, gérer les **co-propriétaires**,
+    les **chaînes et thèmes** ;
   - **sous-titres** (ajout / suppression de pistes `.vtt` / `.srt`) ;
   - **Remplacer** le fichier source puis **ré-encoder** (le titre, les chaînes
     et les droits sont conservés) ;
-  - **supprimer** une vidéo ;
-  - modification du **type en masse** sur les vidéos affichées.
+  - **sélection multiple** : statut, chaîne, type et disciplines sur un lot.
+
+  Pas de suppression de vidéo (retirée en 3.4.2).
 
   L'onglet **se rafraîchit automatiquement** quand on change de propriétaire
   (dans l'onglet Téléversement).
@@ -91,6 +94,7 @@ python -m PyInstaller --onefile --windowed --name PodTeleverseur ^
 | `app.py`                 | Interface graphique (CustomTkinter) + logique des onglets   |
 | `pod_api.py`             | Client de l'API REST Esup-Pod (jeton Bearer)                |
 | `pod_chunked.py`         | Téléversement / remplacement **par morceaux** (session web) |
+| `tableau.py`             | Tableau natif stylé, filtres en pastilles (repris de PodAdmin) |
 | `config.py`              | Configuration + stockage sécurisé du jeton (keyring OS)     |
 | `verifier_mes_videos.py` | Sonde de diagnostic (filtre propriétaire côté serveur)      |
 | `assets/`                | Logo Université de Toulouse + icônes                        |
@@ -205,9 +209,9 @@ demandé au serveur (paramètre `owner`) **et refait systématiquement côté
 client** : si l'instance ignorait ce paramètre, elle renverrait toutes les
 vidéos de la plateforme. ⚠️ Ne jamais supprimer le filtre client
 (`TestFiltreProprietaire`). Depuis la 3.3.3, les vidéos dont le compte est
-**co-propriétaire** y entrent aussi (repère 👥). Pod réserve la suppression au
-propriétaire : le bouton est masqué sur ces vidéos, et `_myvids_delete` refuse
-aussi par sécurité.
+**co-propriétaire** y entrent aussi (repère 👥). Aucune suppression de vidéo
+n'est proposée, ni pour une vidéo ni en lot (retirée en 3.4.2,
+`tests/test_sans_suppression.py`).
 
 ⚠️ Le filtre serveur `owner=` ne renvoie que les vidéos POSSÉDÉES. Les vidéos
 en co-propriété exigent le filtre `additional_owners`, ou à défaut une lecture
@@ -224,6 +228,20 @@ d'une instance à l'autre : sur videos.utoulouse.fr, `owner=<URL>` est refusé
 forme, et son échec vidait tout l'onglet. L'application essaie désormais l'id
 numérique, l'URL, puis `owner__username`, et se rabat sur une lecture complète
 — toujours re-filtrée côté client (`TestFiltreServeurFacultatif`).
+
+**Tableau natif et pastilles (depuis la 3.5.0, repris de PodAdmin 1.12/1.13).**
+La liste est un `ttk.Treeview` (`myvids_tree`, colonnes `ENTETES_MES_VIDEOS`) :
+plus de plafond à 300 lignes, tri par les en-têtes Titre et Ajoutée le
+(`_myvids_tri`), flèches haut et bas. Les filtres sont des `PastilleFiltre`
+(module `tableau.py`) dans une `RangeeFluide` qui passe à la ligne ; ils gardent
+l'interface d'un menu déroulant (get, set, values), le filtrage n'a pas changé.
+Pastille « Rôle » : propriétaire ou co-propriétaire.
+
+- ⚠️ Un Treeview n'a que des couleurs simples : `_basculer_theme` appelle
+  `styler_tableaux` à chaque changement de mode.
+- ⚠️ Sélection native coupée (`selectmode="none"`) : les teintes « courante »
+  et « multi » sont des étiquettes posées par `_myvids_teinter_lignes`, une
+  seule par ligne.
 
 
 ## Discipline au téléversement (depuis la 3.3.0)
