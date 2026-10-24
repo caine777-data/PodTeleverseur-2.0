@@ -16,16 +16,19 @@ d'accès, réaffectation, inventaire, modération…) ont été retirés.
   propriétaires additionnels communs, lancement automatique de l'encodage.
   Les gros fichiers (> 150 Mo) passent par le téléversement **par morceaux**
   (chunké) pour absorber les coupures de la passerelle.
-- **🎞️ Mes vidéos** — gestion des vidéos **du propriétaire sélectionné**
-  (uniquement les siennes) :
-  - filtres (texte, statut, encodage, chaîne, type) ;
+- **🎞️ Mes vidéos** — gestion des vidéos **du propriétaire sélectionné**,
+  et de celles dont il est co-propriétaire :
+  - tableau triable, recherche et filtres en pastilles (statut, encodage,
+    chaîne, type, rôle) ;
   - renommer, changer le **statut** (Brouillon / Public / Restreint) ;
-  - changer le **type**, gérer les **co-propriétaires** ;
+  - changer le **type** et les **disciplines**, gérer les **co-propriétaires**,
+    les **chaînes et thèmes** ;
   - **sous-titres** (ajout / suppression de pistes `.vtt` / `.srt`) ;
   - **Remplacer** le fichier source puis **ré-encoder** (le titre, les chaînes
     et les droits sont conservés) ;
-  - **supprimer** une vidéo ;
-  - modification du **type en masse** sur les vidéos affichées.
+  - **sélection multiple** : statut, chaîne, type et disciplines sur un lot.
+
+  Pas de suppression de vidéo (retirée en 3.4.2).
 
   L'onglet **se rafraîchit automatiquement** quand on change de propriétaire
   (dans l'onglet Téléversement).
@@ -206,9 +209,9 @@ demandé au serveur (paramètre `owner`) **et refait systématiquement côté
 client** : si l'instance ignorait ce paramètre, elle renverrait toutes les
 vidéos de la plateforme. ⚠️ Ne jamais supprimer le filtre client
 (`TestFiltreProprietaire`). Depuis la 3.3.3, les vidéos dont le compte est
-**co-propriétaire** y entrent aussi (repère 👥). Pod réserve la suppression au
-propriétaire : le bouton est masqué sur ces vidéos, et `_myvids_delete` refuse
-aussi par sécurité.
+**co-propriétaire** y entrent aussi (repère 👥). Aucune suppression de vidéo
+n'est proposée, ni pour une vidéo ni en lot (retirée en 3.4.2,
+`tests/test_sans_suppression.py`).
 
 ⚠️ Le filtre serveur `owner=` ne renvoie que les vidéos POSSÉDÉES. Les vidéos
 en co-propriété exigent le filtre `additional_owners`, ou à défaut une lecture
