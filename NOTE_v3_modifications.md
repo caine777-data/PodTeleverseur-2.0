@@ -233,3 +233,22 @@ Repris de PodAdmin 1.12 et 1.13 ; maquette validée par Cédric le 2026-10-23.
 - Corrigé à part : le filtre « Public » incluait les vidéos restreintes.
 
 Tests : `tests/test_tableau.py` (20 tests, 25 mutations), `tests/test_filtres.py`.
+
+## 3.6.0 : comptes locaux acceptés comme propriétaire des vidéos
+
+Demande de Cédric (2026-11-05) : des personnes sans identifiant universitaire
+se connectent avec un compte LOCAL.
+
+- Le format « 3 lettres, 4 chiffres, 1 lettre » n'est plus exigé
+  (`IDENTIFIANT_FORMAT` supprimé). Tout nom sans espace est accepté, à
+  condition qu'un compte de la plateforme le porte EXACTEMENT.
+- Seul le compte véhicule (DEPOT) reste refusé, à la saisie comme au
+  lancement d'un envoi : aucune vidéo ne doit lui appartenir.
+- La casse est gardée : `?username=` distingue majuscules et minuscules, le nom
+  est demandé tel que saisi, puis en minuscules. Comparaison finale sans casse.
+- Filet : si le filtre serveur ne trouve rien, le compte est cherché dans
+  l'annuaire chargé au premier lancement (`all_users`), égalité exacte et unique.
+- Aide (rubriques 2 et 5) et libellés de saisie : « identifiant universitaire
+  ou local ».
+
+Tests : `tests/test_identifiant.py` (46 tests, 10 mutations).

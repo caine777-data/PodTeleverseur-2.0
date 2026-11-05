@@ -267,15 +267,24 @@ class PodAPI:
         `?username__iexact=` est ignoré. On vérifie malgré tout l'égalité côté
         client : si le serveur ignorait un jour le filtre, il renverrait tout
         l'annuaire, et le premier résultat ne serait pas le bon compte. Plus
-        d'un compte exact → None (ambigu : on refuse plutôt que deviner)."""
-        cible = str(username or "").strip().lower()
-        if not cible:
+        d'un compte exact → None (ambigu : on refuse plutôt que deviner).
+
+        Le nom est d'abord demandé TEL QUE SAISI : `?username=` distingue
+        majuscules et minuscules, et un compte local peut en contenir
+        (« Jean.Dupont »). Sans résultat, on retente en minuscules, la forme
+        des identifiants universitaires. La comparaison finale ignore la casse."""
+        saisi = str(username or "").strip()
+        if not saisi:
             return None
-        data = self._get("/users/", {"username": cible, "limit": 5})
-        comptes = data.get("results", []) if isinstance(data, dict) else (data or [])
-        exacts = [u for u in comptes
-                  if str(u.get("username", "")).strip().lower() == cible]
-        return exacts[0] if len(exacts) == 1 else None
+        cible = saisi.lower()
+        for forme in dict.fromkeys((saisi, cible)):       # sans doublon, dans l'ordre
+            data = self._get("/users/", {"username": forme, "limit": 5})
+            comptes = data.get("results", []) if isinstance(data, dict) else (data or [])
+            exacts = [u for u in comptes
+                      if str(u.get("username", "")).strip().lower() == cible]
+            if exacts:
+                return exacts[0] if len(exacts) == 1 else None
+        return None
 
     def get_all_users(self, max_pages: int = 80) -> list[dict]:
         """Récupère TOUS les utilisateurs en suivant la pagination de l'API."""

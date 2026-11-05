@@ -28,7 +28,6 @@ __license__     = "Usage interne — Université de Toulouse"
 
 
 import os
-import re
 import sys
 import threading
 import uuid
@@ -988,7 +987,8 @@ class App(_AppBase):
         self._myvids_notify_owner_changed()
 
     # Le propriétaire n'est plus choisi dans l'annuaire de TOUS les comptes :
-    # l'enseignant SAISIT son identifiant universitaire (ex. abc1234a). La
+    # l'enseignant SAISIT son identifiant, universitaire (ex. abc1234a) ou
+    # local (depuis la 3.6.0). La
     # sonde verifier_identifiant.py (26/09/2026) a montré qu'un jeton
     # d'enseignant voit tout l'annuaire : la liste permettait de choisir
     # n'importe quel collègue — ou un compte local d'administration comme
@@ -1001,35 +1001,63 @@ class App(_AppBase):
 
     @staticmethod
     def _normaliser_identifiant(texte) -> str:
-        """Identifiant tel qu'on le compare : sans espaces, en minuscules."""
-        return str(texte or "").strip().lower()
+        """Identifiant tel qu'on le cherche : sans espaces autour. La casse est
+        GARDÉE : un compte local peut contenir des majuscules."""
+        return str(texte or "").strip()
+
+    @staticmethod
+    def _est_compte_vehicule(texte) -> bool:
+        """Vrai pour le compte de service embarqué (DEPOT), quelle que soit la casse."""
+        return App._normaliser_identifiant(texte).lower() == cfg.VEHICLE_USERNAME.lower()
 
     @staticmethod
     def _identifiant_valide(texte) -> bool:
-        """Vrai si `texte` a la forme d'un identifiant universitaire.
-        Écarte d'office les comptes locaux d'administration (DEPOT…)."""
-        return bool(re.match(cfg.IDENTIFIANT_FORMAT, App._normaliser_identifiant(texte)))
+        """Vrai si `texte` peut désigner le propriétaire des vidéos : non vide,
+        sans espace, et pas le compte véhicule. Depuis la 3.6.0, tout compte de
+        la plateforme est accepté, universitaire ou local ; son existence est
+        vérifiée ensuite par `_resoudre_identifiant`."""
+        ident = App._normaliser_identifiant(texte)
+        return bool(ident) and not any(c.isspace() for c in ident) \
+            and not App._est_compte_vehicule(ident)
 
     def _resoudre_identifiant(self, texte):
-        """(Thread) Retrouve le compte Pod d'un identifiant universitaire.
+        """(Thread) Retrouve le compte Pod d'un identifiant, universitaire ou local.
 
         Renvoie (compte, "") si le compte existe, sinon (None, message à
-        afficher). Aucune approximation : format strict, puis égalité exacte
-        du nom d'utilisateur (voir PodAPI.find_user_by_username)."""
+        afficher). Aucune approximation : égalité exacte du nom d'utilisateur,
+        demandée au serveur (PodAPI.find_user_by_username) puis, à défaut,
+        cherchée dans l'annuaire chargé au démarrage."""
         ident = self._normaliser_identifiant(texte)
-        if not self._identifiant_valide(ident):
-            return None, (f"« {ident or '(vide)'} » n'est pas un identifiant universitaire : "
-                          "3 lettres, 4 chiffres et 1 lettre (ex. abc1234d).")
+        if not ident:
+            return None, "Saisissez un identifiant (ex. abc1234d)."
+        if any(c.isspace() for c in ident):
+            return None, f"« {ident} » contient une espace : un identifiant n'en contient pas."
+        if self._est_compte_vehicule(ident):
+            return None, (f"« {ident} » est le compte de service de l'application : "
+                          "il ne peut pas être propriétaire des vidéos.")
         if not self.api:
             return None, "Connectez-vous d'abord (onglet Configuration)."
         try:
             compte = self.api.find_user_by_username(ident)
         except Exception as e:
             return None, f"Recherche impossible : {message_utilisateur(e)}"
+        if not compte:
+            compte = self._compte_dans_annuaire(ident)
         if not compte or not compte.get("url"):
             return None, (f"Aucun compte de la plateforme ne porte l'identifiant « {ident} ». "
                           "Vérifiez-le ; s'il est exact, contactez le support.")
         return compte, ""
+
+    def _compte_dans_annuaire(self, ident):
+        """Compte de l'annuaire chargé au démarrage (`all_users`) dont le nom
+        est exactement `ident`, casse ignorée ; None si absent ou ambigu.
+
+        Filet de sécurité : si le filtre serveur `?username=` ne trouvait pas
+        un compte local, la liste complète des comptes le trouve."""
+        cible = ident.lower()
+        exacts = [u for u in (getattr(self, "all_users", None) or [])
+                  if str(u.get("username", "")).strip().lower() == cible]
+        return exacts[0] if len(exacts) == 1 else None
 
     def _demander_identifiant(self, intro: str, apres=None):
         """Ouvre la fenêtre de saisie de l'identifiant ; `apres()` est appelée
@@ -1051,10 +1079,10 @@ class App(_AppBase):
                           prefill=actuel if self._identifiant_valide(actuel) else "")
 
     def _choose_upload_owner(self):
-        """Demande l'identifiant universitaire du PROPRIÉTAIRE des vidéos."""
+        """Demande l'identifiant (universitaire ou local) du PROPRIÉTAIRE des vidéos."""
         self._demander_identifiant(
             "Au nom de quel compte les vidéos seront-elles déposées ?\n"
-            "Saisissez VOTRE identifiant universitaire (ex. abc1234d).\n"
+            "Saisissez VOTRE identifiant (universitaire, ex. abc1234d, ou local).\n"
             "Ce choix s'applique à tout le lot.")
 
     # ── Lancement du téléversement ───────────────────────────────────────
@@ -1079,13 +1107,13 @@ class App(_AppBase):
                 text_color=T_ALERTE)
             self._choose_upload_owner()
             return
-        # Un propriétaire enregistré AVANT la saisie par identifiant peut être
-        # un compte local (DEPOT, compte d'admin…) : on exige un identifiant
-        # universitaire, sans quoi on redemande. Pas d'envoi en attendant.
+        # Un propriétaire enregistré par une version antérieure peut être le
+        # compte de service (DEPOT) : aucune vidéo ne doit lui appartenir, on
+        # redemande l'identifiant. Pas d'envoi en attendant.
         if not self._identifiant_valide(self.config_data.get("agent_username", "")):
             self.global_msg.configure(
-                text="⚠️ Le propriétaire enregistré n'est pas un identifiant universitaire : "
-                     "saisissez le vôtre.",
+                text="⚠️ Le propriétaire enregistré ne peut pas recevoir de vidéos : "
+                     "saisissez votre identifiant.",
                 text_color=T_ALERTE)
             self._choose_upload_owner()
             return
@@ -3350,12 +3378,12 @@ class App(_AppBase):
 
         ctk.CTkFrame(frame, height=1, fg_color=C_NEUTRE).pack(fill="x", pady=8)
 
-        # — Propriétaire des vidéos : identifiant universitaire —
+        # — Propriétaire des vidéos : identifiant universitaire ou local —
         # Plus d'annuaire ici (voir _normaliser_identifiant) : une saisie, un
         # contrôle de format, puis une recherche EXACTE sur la plateforme.
         agent_box = ctk.CTkFrame(frame)
         agent_box.pack(fill="x")
-        ctk.CTkLabel(agent_box, text="Propriétaire des vidéos (votre identifiant universitaire)",
+        ctk.CTkLabel(agent_box, text="Propriétaire des vidéos (votre identifiant, universitaire ou local)",
                      font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=3,
                                                            padx=12, pady=(12, 2), sticky="w")
         ctk.CTkLabel(agent_box,
@@ -3846,9 +3874,9 @@ class App(_AppBase):
             self._show_tab("upload")   # on enchaîne directement sur le téléversement
 
         IdentifiantDialog(
-            self, on_found=trouve, title="Votre identifiant universitaire",
+            self, on_found=trouve, title="Votre identifiant",
             intro=("Au nom de quel compte les vidéos seront-elles déposées ?\n"
-                   "Saisissez VOTRE identifiant universitaire (ex. abc1234d).\n"
+                   "Saisissez VOTRE identifiant (universitaire, ex. abc1234d, ou local).\n"
                    "Vous pourrez le changer depuis l'onglet « Configuration »."),
             prefill=suggestion if self._identifiant_valide(suggestion) else "")
 
@@ -4412,14 +4440,15 @@ class App(_AppBase):
              "Le token remplace l'identifiant et le mot de passe : il donne les mêmes "
              "droits que le compte auquel il est rattaché."),
 
-            ("2. Votre identifiant universitaire (compte déposant)",
+            ("2. Votre identifiant (compte déposant)",
              "Les vidéos doivent être déposées au nom d'un compte (leur futur "
              "propriétaire). À la première connexion :\n"
              "• si l'application reconnaît votre compte avec certitude, elle le "
              "sélectionne automatiquement ;\n"
-             "• sinon, elle vous demande votre IDENTIFIANT UNIVERSITAIRE : 3 lettres, "
-             "4 chiffres et 1 lettre (ex. abc1234d). Elle vérifie qu'un compte de la "
-             "plateforme porte exactement cet identifiant.\n\n"
+             "• sinon, elle vous demande votre IDENTIFIANT : l'identifiant "
+             "universitaire (ex. abc1234d) ou, si vous n'en avez pas, le nom de "
+             "votre compte local. Elle vérifie qu'un compte de la plateforme porte "
+             "exactement cet identifiant.\n\n"
              "Ce choix est mémorisé sur ce poste. Vous pouvez le changer à tout "
              "moment dans l'onglet « Configuration », ce qui est utile si vous "
              "déposez pour plusieurs enseignants."),
@@ -4458,16 +4487,15 @@ class App(_AppBase):
 
             ("5. Propriétaire des vidéos (obligatoire)",
              "Vous devez indiquer le compte PROPRIÉTAIRE des vidéos avant tout "
-             "envoi, en saisissant son identifiant universitaire via le bouton "
+             "envoi, en saisissant son identifiant (universitaire ou local) via le bouton "
              "« 🎯 Saisir l'identifiant… ». "
              "L'état affiché à côté indique :\n"
              "• « ⚠️ à définir avant l'envoi » (orange) tant qu'aucun compte n'est "
              "choisi ;\n"
              "• « ✅ [nom] » (vert) une fois le compte défini.\n\n"
-             "Si vous lancez l'envoi sans propriétaire, ou avec un compte qui n'est "
-             "pas un identifiant universitaire, l'application NE téléverse RIEN et "
-             "vous le demande : ce blocage est volontaire, pour éviter tout dépôt "
-             "au mauvais nom. Ce propriétaire s'applique à tout le lot.\n\n"
+             "Si vous lancez l'envoi sans propriétaire, l'application NE téléverse "
+             "RIEN et vous le demande : ce blocage est volontaire, pour éviter tout "
+             "dépôt au mauvais nom. Ce propriétaire s'applique à tout le lot.\n\n"
              "Les propriétaires additionnels, eux, se choisissent dans la liste de "
              "toutes les personnes de la plateforme (bouton « 👥 Propriétaires "
              "additionnels… »)."),
@@ -5138,7 +5166,7 @@ class ProgressModal(ctk.CTkToplevel):
 
 
 class IdentifiantDialog(ctk.CTkToplevel):
-    """Saisie de l'identifiant universitaire du propriétaire des vidéos.
+    """Saisie de l'identifiant (universitaire ou local) du propriétaire des vidéos.
 
     Le format est contrôlé tout de suite (message immédiat) ; la recherche du
     compte sur la plateforme se fait en arrière-plan, et la fenêtre ne se
@@ -5153,7 +5181,7 @@ class IdentifiantDialog(ctk.CTkToplevel):
         self.geometry("470x250")
         _focus_toplevel(self, master)
 
-        ctk.CTkLabel(self, text=intro or "Saisissez votre identifiant universitaire.",
+        ctk.CTkLabel(self, text=intro or "Saisissez votre identifiant (universitaire ou local).",
                      justify="left").pack(padx=14, pady=(14, 8), anchor="w")
         self.entry = ctk.CTkEntry(self, width=220, placeholder_text="ex. abc1234d")
         self.entry.pack(padx=14, anchor="w")
