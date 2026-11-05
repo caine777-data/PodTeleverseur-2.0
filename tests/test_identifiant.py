@@ -1,8 +1,10 @@
-"""Tests : propriétaire des vidéos désigné par l'identifiant universitaire.
+"""Tests : propriétaire des vidéos désigné par son identifiant.
 
 Le propriétaire n'est plus choisi dans l'annuaire de tous les comptes : il est
-SAISI (ex. abc1234a), contrôlé par son format, puis retrouvé EXACTEMENT sur la
-plateforme. Les co-propriétaires, eux, gardent la liste complète.
+SAISI, puis retrouvé EXACTEMENT sur la plateforme. Depuis la 3.6.0, un compte
+LOCAL est accepté comme un identifiant universitaire (ex. abc1234a) ; seul le
+compte véhicule (DEPOT) reste refusé. Les co-propriétaires, eux, gardent la
+liste complète.
 
 Chaque test a été éprouvé par mutation. Aucun réseau : API simulée. Rien
 n'est écrit dans la vraie configuration du poste (save_config neutralisé).
@@ -16,19 +18,23 @@ from pod_api import PodAPI, PodAPIError
 # ── Format ─────────────────────────────────────────────────────────────────
 
 class TestFormat:
-    """3 lettres, 4 chiffres, 1 lettre : le format de TOUS les comptes
-    d'usagers relevé par la sonde. Les comptes locaux (DEPOT…) sont écartés."""
+    """Plus de format imposé (3.6.0) : universitaire ou local, tout nom sans
+    espace est cherché sur la plateforme. Le compte véhicule est écarté."""
 
-    @pytest.mark.parametrize("ident", ["abc1234a", "xyz9876a", "ABC1234A", "  abc1234a  "])
+    @pytest.mark.parametrize("ident", [
+        "abc1234a", "ABC1234A", "  abc1234a  ",
+        "Jean.Dupont", "prof.dupont", "aaa_aaaa", "abc1234", "local-42"])
     def test_identifiants_acceptes(self, module_app, ident):
         assert module_app.App._identifiant_valide(ident)
 
     @pytest.mark.parametrize("ident", [
-        "DEPOT", "depot", "admin", "prof.dupont", "aaa_aaaa", "superutilisateur",
-        "abc1234",            # lettre finale manquante : jamais vue chez un usager
-        "abc12340", "bz1234a", "abcj1234a", "abc1234ab", "abc 1234a", "", None])
+        "DEPOT", "depot", "  Depot ", "abc 1234a", "jean\tdupont", "", "   ", None])
     def test_identifiants_refuses(self, module_app, ident):
         assert not module_app.App._identifiant_valide(ident)
+
+    def test_la_casse_est_gardee(self, module_app):
+        """Un compte local peut contenir des majuscules : on ne les efface pas."""
+        assert module_app.App._normaliser_identifiant(" Jean.Dupont ") == "Jean.Dupont"
 
     def test_le_compte_vehicule_n_est_jamais_un_identifiant(self, module_app):
         """Garantie de sécurité : aucun dépôt ne peut être attribué à DEPOT."""
@@ -105,6 +111,22 @@ class TestRechercheExacte:
         api = _api(lambda p: {"results": [ANNUAIRE[0], dict(ANNUAIRE[0], url="x")]})
         assert api.find_user_by_username("xyz9876a") is None
 
+    def test_compte_local_avec_majuscules(self):
+        """`?username=` distingue la casse : le nom est d'abord demandé tel
+        que saisi, sinon « Jean.Dupont » ne serait jamais trouvé."""
+        local = {"username": "Jean.Dupont", "url": "https://pod.exemple.fr/rest/users/9/"}
+        api = _api(lambda p: {"results": [local] if p.get("username") == "Jean.Dupont" else []})
+        assert api.find_user_by_username(" Jean.Dupont ") == local
+        assert [a["username"] for a in api.session.appels] == ["Jean.Dupont"]
+
+    def test_repli_en_minuscules(self):
+        """Saisi en majuscules, un identifiant universitaire (en minuscules sur
+        Pod) est retrouvé par la seconde requête."""
+        api = _api(lambda p: {"results": [u for u in ANNUAIRE
+                                          if u["username"] == p.get("username")]})
+        assert api.find_user_by_username("ABC1234A")["username"] == "abc1234a"
+        assert [a["username"] for a in api.session.appels] == ["ABC1234A", "abc1234a"]
+
     def test_identifiant_vide_aucune_requete(self):
         api = _api(lambda p: {"results": ANNUAIRE})
         assert api.find_user_by_username("  ") is None
@@ -128,22 +150,26 @@ class FausseAPI:
         self.recherches = []
 
     def find_user_by_username(self, ident):
+        """Comme le vrai : égalité exacte, casse ignorée."""
         self.recherches.append(ident)
         if self.erreur:
             raise self.erreur
-        return self.comptes.get(ident)
+        return next((c for n, c in self.comptes.items() if n.lower() == ident.lower()), None)
 
 
 def _faux(m, api):
     f = _Rien()
-    f.__dict__.update(api=api)
+    f.__dict__.update(api=api, all_users=[])
     f._normaliser_identifiant = m.App._normaliser_identifiant
     f._identifiant_valide = m.App._identifiant_valide
+    f._est_compte_vehicule = m.App._est_compte_vehicule
+    f._compte_dans_annuaire = m.App._compte_dans_annuaire.__get__(f)
     f._resoudre_identifiant = m.App._resoudre_identifiant.__get__(f)
     return f
 
 
 PROF = {"username": "abc1234a", "url": "https://pod.exemple.fr/rest/users/8/"}
+LOCAL = {"username": "Jean.Dupont", "url": "https://pod.exemple.fr/rest/users/9/"}
 
 
 class TestResolution:
@@ -151,13 +177,37 @@ class TestResolution:
     def test_compte_trouve(self, module_app):
         f = _faux(module_app, FausseAPI([PROF]))
         assert f._resoudre_identifiant(" ABC1234A ") == (PROF, "")
-        assert f.api.recherches == ["abc1234a"]
+        assert f.api.recherches == ["ABC1234A"]
 
-    def test_format_invalide_sans_appel_reseau(self, module_app):
-        f = _faux(module_app, FausseAPI([PROF]))
-        compte, message = f._resoudre_identifiant("DEPOT")
-        assert compte is None and "3 lettres, 4 chiffres et 1 lettre" in message
+    def test_compte_local_trouve(self, module_app):
+        f = _faux(module_app, FausseAPI([LOCAL]))
+        assert f._resoudre_identifiant("Jean.Dupont") == (LOCAL, "")
+
+    def test_compte_vehicule_refuse_sans_appel_reseau(self, module_app):
+        f = _faux(module_app, FausseAPI([PROF, {"username": "DEPOT", "url": "u"}]))
+        compte, message = f._resoudre_identifiant("depot")
+        assert compte is None and "compte de service" in message
         assert f.api.recherches == []
+
+    @pytest.mark.parametrize("ident, indice", [("", "Saisissez"), ("jean dupont", "espace")])
+    def test_saisie_impossible_sans_appel_reseau(self, module_app, ident, indice):
+        f = _faux(module_app, FausseAPI([PROF]))
+        compte, message = f._resoudre_identifiant(ident)
+        assert compte is None and indice in message
+        assert f.api.recherches == []
+
+    def test_trouve_dans_l_annuaire_si_le_serveur_ne_trouve_pas(self, module_app):
+        """Filet : un compte local absent du filtre serveur, mais présent dans
+        la liste des comptes chargée au premier lancement."""
+        f = _faux(module_app, FausseAPI([]))
+        f.all_users = [PROF, LOCAL]
+        assert f._resoudre_identifiant("jean.dupont") == (LOCAL, "")
+
+    def test_annuaire_ambigu_refuse(self, module_app):
+        f = _faux(module_app, FausseAPI([]))
+        f.all_users = [LOCAL, dict(LOCAL, url="https://pod.exemple.fr/rest/users/10/")]
+        compte, message = f._resoudre_identifiant("Jean.Dupont")
+        assert compte is None and "Aucun compte" in message
 
     def test_compte_inconnu(self, module_app):
         f = _faux(module_app, FausseAPI([]))
@@ -176,8 +226,9 @@ class TestResolution:
 
 
 class TestGardeFouAuLancement:
-    """Un propriétaire enregistré AVANT cette version peut être un compte
-    local (DEPOT…) : l'envoi est refusé et l'identifiant redemandé."""
+    """Un propriétaire enregistré par une version antérieure peut être le
+    compte véhicule (DEPOT) : l'envoi est refusé et l'identifiant redemandé.
+    Un compte local, lui, est accepté (3.6.0)."""
 
     def _lancer(self, m, username):
         f = _faux(m, object())
@@ -200,6 +251,10 @@ class TestGardeFouAuLancement:
         f = self._lancer(module_app, "abc1234a")
         assert f.demandes == [] and len(f.lancements) == 1
 
+    def test_compte_local_lance(self, module_app):
+        f = self._lancer(module_app, "Jean.Dupont")
+        assert f.demandes == [] and len(f.lancements) == 1
+
 
 # ── Fenêtres réelles (une seule instance App pour le module) ───────────────
 
@@ -220,14 +275,14 @@ def fen(app, monkeypatch, module_app):
 
 class TestFenetreDeSaisie:
 
-    def test_format_invalide_reste_ouverte(self, fen, module_app):
+    def test_compte_vehicule_reste_ouverte(self, fen, module_app):
         trouves = []
         d = module_app.IdentifiantDialog(fen, on_found=trouves.append)
         try:
             d.entry.insert(0, "DEPOT")
             d._valider()
             assert trouves == [] and d.winfo_exists()
-            assert "3 lettres" in d.msg.cget("text")
+            assert "compte de service" in d.msg.cget("text")
             assert fen.api.recherches == []
             assert fen.taches == []                  # refusé sans tâche de fond
         finally:
@@ -239,6 +294,15 @@ class TestFenetreDeSaisie:
         d.entry.insert(0, "ABC1234A")
         d._valider()
         assert trouves == [PROF]
+        assert not d.winfo_exists()
+
+    def test_compte_local_ferme_et_transmet(self, fen, module_app, monkeypatch):
+        monkeypatch.setattr(fen, "api", FausseAPI([LOCAL]))
+        trouves = []
+        d = module_app.IdentifiantDialog(fen, on_found=trouves.append)
+        d.entry.insert(0, "Jean.Dupont")
+        d._valider()
+        assert trouves == [LOCAL]
         assert not d.winfo_exists()
 
     def test_compte_inconnu_reste_ouverte(self, fen, module_app):
@@ -267,7 +331,15 @@ class TestOngletConfiguration:
         assert fen.config_data["agent_username"] == "abc1234a"
         assert "✅" in fen.agent_msg.cget("text")
 
-    def test_compte_local_refuse(self, fen):
+    def test_compte_local_accepte(self, fen, monkeypatch):
+        monkeypatch.setattr(fen, "api", FausseAPI([LOCAL]))
+        fen.agent_entry.delete(0, "end")
+        fen.agent_entry.insert(0, "Jean.Dupont")
+        fen._valider_identifiant_config()
+        assert fen.config_data["agent_username"] == "Jean.Dupont"
+        assert "✅" in fen.agent_msg.cget("text")
+
+    def test_compte_vehicule_refuse(self, fen):
         avant = dict(fen.config_data)
         fen.agent_entry.delete(0, "end")
         fen.agent_entry.insert(0, "DEPOT")
